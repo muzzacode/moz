@@ -51,9 +51,18 @@ moz --help
 In the TUI:
 
 - Type a message and press `Enter` to chat.
-- `/model <id>` — switch model.
-- `/exit` — quit.
+- `Shift+Enter` — insert a newline.
+- `/mode adaptive` — let Moz pick the model per task.
+- `/mode manual` — lock the current model.
+- `/mode <profile-id>` or `/model <id>` — switch model manually.
 - `/memory` — show current session memory summary.
+- `/clear` — start a new session.
+- `/exit` — quit.
+
+### Modes
+
+- **adaptive** (default): classifies the task and picks the cheapest capable model, falling back to local models when cloud keys are missing.
+- **manual**: stays on the model you selected.
 
 ## Configuration
 

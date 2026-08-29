@@ -11,10 +11,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muzzacode/moz/internal/adaptive"
 	"github.com/muzzacode/moz/internal/config"
+	"github.com/muzzacode/moz/internal/credentials"
+	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
-	"github.com/muzzacode/moz/internal/ollama"
 	"github.com/muzzacode/moz/internal/version"
 )
 
@@ -28,33 +30,48 @@ type Model struct {
 	registry *models.Registry
 	store    *memory.Store
 	session  *memory.Session
-	profile  *models.Profile
+	creds    *credentials.Manager
+	router   *adaptive.Router
+
+	profile      *models.Profile
+	mode         string
+	lastDecision *adaptive.Decision
 
 	viewport   viewport.Model
 	textarea   textarea.Model
 	ready      bool
 	streaming  bool
-	streamChan chan ollama.StreamEvent
+	streamChan chan llm.StreamEvent
 	pending    string
 	errMsg     string
 }
 
 var (
-	userStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
+	userStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
 	assistantStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4ECDC4"))
-	systemStyle = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#95A5A6"))
-	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C"))
-	statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("#2C3E50")).Foreground(lipgloss.Color("#ECF0F1"))
+	systemStyle    = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#95A5A6"))
+	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C"))
+	statusStyle    = lipgloss.NewStyle().Background(lipgloss.Color("#2C3E50")).Foreground(lipgloss.Color("#ECF0F1"))
+	infoStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#3498DB"))
 )
 
 func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*Model, error) {
+	creds := credentials.New()
+	router := adaptive.New(registry, creds)
+	router.PreferLocal = cfg.Adaptive.PreferLocal
+
 	profile, err := registry.Find(cfg.DefaultModel)
 	if err != nil {
 		profile = &registry.Profiles[0]
 	}
 
+	mode := cfg.Mode
+	if mode == "" {
+		mode = "adaptive"
+	}
+
 	ta := textarea.New()
-	ta.Placeholder = "Type a message, or /exit to quit"
+	ta.Placeholder = "Type a message, or /help for commands"
 	ta.SetWidth(80)
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
@@ -72,10 +89,13 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*M
 		registry:   registry,
 		store:      store,
 		session:    sess,
+		creds:      creds,
+		router:     router,
 		profile:    profile,
+		mode:       mode,
 		textarea:   ta,
 		viewport:   vp,
-		streamChan: make(chan ollama.StreamEvent),
+		streamChan: make(chan llm.StreamEvent),
 	}, nil
 }
 
@@ -110,7 +130,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
 
-	case ollama.StreamEvent:
+	case llm.StreamEvent:
 		return m.handleStreamEvent(msg)
 
 	case errMsg:
@@ -146,6 +166,20 @@ func (m *Model) submitInput() (tea.Model, tea.Cmd) {
 		Content:   input,
 		Timestamp: time.Now().UTC(),
 	})
+
+	// Select model.
+	if m.mode == "adaptive" {
+		decision, err := m.router.Select(input)
+		if err != nil {
+			m.errMsg = err.Error()
+			m.updateViewport()
+			return m, nil
+		}
+		m.lastDecision = decision
+		m.profile = decision.Profile
+		m.addSystem(fmt.Sprintf("Adaptive: %s", decision.Reason))
+	}
+
 	m.updateViewport()
 
 	return m, m.startStream()
@@ -173,8 +207,34 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.profile = p
+		m.mode = "manual"
 		m.errMsg = ""
 		m.addSystem(fmt.Sprintf("Switched to model: %s", p.Name))
+		return m, nil
+
+	case "/mode":
+		if len(parts) < 2 {
+			m.errMsg = "usage: /mode adaptive | manual | <profile-id>"
+			return m, nil
+		}
+		arg := parts[1]
+		switch arg {
+		case "adaptive":
+			m.mode = "adaptive"
+			m.addSystem("Mode: adaptive")
+		case "manual":
+			m.mode = "manual"
+			m.addSystem("Mode: manual")
+		default:
+			p, err := m.registry.Find(arg)
+			if err != nil {
+				m.errMsg = err.Error()
+				return m, nil
+			}
+			m.profile = p
+			m.mode = "manual"
+			m.addSystem(fmt.Sprintf("Mode: manual, model: %s", p.Name))
+		}
 		return m, nil
 
 	case "/memory":
@@ -187,6 +247,10 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.updateViewport()
 		m.addSystem("New session started")
+		return m, nil
+
+	case "/help":
+		m.addSystem("Commands: /model, /mode, /memory, /clear, /exit")
 		return m, nil
 
 	default:
@@ -209,26 +273,26 @@ func (m *Model) startStream() tea.Cmd {
 	m.pending = ""
 	m.errMsg = ""
 
-	ch := make(chan ollama.StreamEvent)
+	ch := make(chan llm.StreamEvent)
 	m.streamChan = ch
 
-	client := ollama.New(m.profile)
+	client := llm.New(m.profile, m.creds)
 	go client.ChatStream(context.Background(), m.session.Messages, ch)
 
 	return waitForStream(ch)
 }
 
-func waitForStream(ch chan ollama.StreamEvent) tea.Cmd {
+func waitForStream(ch chan llm.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return ollama.StreamEvent{Done: true}
+			return llm.StreamEvent{Done: true}
 		}
 		return ev
 	}
 }
 
-func (m Model) handleStreamEvent(ev ollama.StreamEvent) (tea.Model, tea.Cmd) {
+func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	if ev.Err != nil {
 		m.streaming = false
 		m.errMsg = ev.Err.Error()
@@ -287,7 +351,7 @@ func formatMessage(m memory.Message) string {
 		}
 		return header + "\n" + m.Content
 	case "system":
-		return systemStyle.Render(m.Content)
+		return infoStyle.Render(m.Content)
 	default:
 		return m.Content
 	}
@@ -305,15 +369,19 @@ func (m Model) View() string {
 		return "Initializing Moz..."
 	}
 
-	status := statusStyle.Width(m.viewport.Width).Render(
-		fmt.Sprintf(" moz %s | model: %s | streaming: %v ", version.Version, m.profile.Name, m.streaming),
-	)
+	var status strings.Builder
+	status.WriteString(fmt.Sprintf(" moz %s | mode: %s | model: %s | streaming: %v ", version.Version, m.mode, m.profile.Name, m.streaming))
+	if m.mode == "adaptive" && m.lastDecision != nil {
+		status.WriteString(fmt.Sprintf("| class: %s ", m.lastDecision.Class))
+	}
+
+	bar := statusStyle.Width(m.viewport.Width).Render(status.String())
 
 	return fmt.Sprintf(
 		"%s\n%s\n%s",
 		m.viewport.View(),
 		m.textarea.View(),
-		status,
+		bar,
 	)
 }
 

@@ -1,10 +1,11 @@
-package ollama
+package llm
 
 import (
 	"context"
 	"fmt"
 	"io"
 
+	"github.com/muzzacode/moz/internal/credentials"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
 
@@ -18,16 +19,33 @@ type StreamEvent struct {
 }
 
 type Client struct {
-	Profile *models.Profile
+	Profile     *models.Profile
+	Credentials *credentials.Manager
 }
 
-func New(p *models.Profile) *Client {
-	return &Client{Profile: p}
+func New(p *models.Profile, cm *credentials.Manager) *Client {
+	if cm == nil {
+		cm = credentials.New()
+	}
+	return &Client{Profile: p, Credentials: cm}
 }
 
 func (c *Client) ChatStream(ctx context.Context, messages []memory.Message, out chan<- StreamEvent) {
 	defer close(out)
-	cfg := openai.DefaultConfig("")
+
+	if !c.Profile.CanUseOpenAIClient() {
+		out <- StreamEvent{Err: fmt.Errorf("provider %s is not supported yet", c.Profile.ProviderKind)}
+		return
+	}
+
+	apiKey := ""
+	if c.Profile.APIKeyCredential != "" {
+		if v, err := c.Credentials.Get(c.Profile.APIKeyCredential); err == nil {
+			apiKey = v
+		}
+	}
+
+	cfg := openai.DefaultConfig(apiKey)
 	if c.Profile.BaseURL != "" {
 		cfg.BaseURL = c.Profile.BaseURL
 	}
@@ -46,6 +64,13 @@ func (c *Client) ChatStream(ctx context.Context, messages []memory.Message, out 
 		Messages:  oaiMessages,
 		Stream:    true,
 		MaxTokens: 4096,
+	}
+
+	if temp, ok := c.Profile.DefaultParams["temperature"].(float64); ok {
+		req.Temperature = float32(temp)
+	}
+	if max, ok := c.Profile.DefaultParams["max_tokens"].(int); ok {
+		req.MaxTokens = max
 	}
 
 	stream, err := client.CreateChatCompletionStream(ctx, req)

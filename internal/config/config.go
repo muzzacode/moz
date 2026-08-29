@@ -8,9 +8,17 @@ import (
 )
 
 type Config struct {
-	OllamaBaseURL string `yaml:"ollama_base_url"`
-	MemoryDir     string `yaml:"memory_dir"`
-	DefaultModel  string `yaml:"default_model"`
+	OllamaBaseURL string       `yaml:"ollama_base_url"`
+	MemoryDir     string       `yaml:"memory_dir"`
+	DefaultModel  string       `yaml:"default_model"`
+	Mode          string       `yaml:"mode"`
+	Adaptive      AdaptiveOpts `yaml:"adaptive"`
+}
+
+type AdaptiveOpts struct {
+	PreferLocal      bool    `yaml:"prefer_local"`
+	MaxCostPerTurn   float64 `yaml:"max_cost_per_turn"`
+	CloudThreshold   float64 `yaml:"cloud_threshold"`
 }
 
 func Default() *Config {
@@ -22,6 +30,12 @@ func Default() *Config {
 		OllamaBaseURL: "http://127.0.0.1:11434/v1/",
 		MemoryDir:     filepath.Join(home, ".config", "moz", "memory"),
 		DefaultModel:  "qwen2.5-coder:14b",
+		Mode:          "adaptive",
+		Adaptive: AdaptiveOpts{
+			PreferLocal:    true,
+			MaxCostPerTurn: 0.0,
+			CloudThreshold: 0.75,
+		},
 	}
 }
 

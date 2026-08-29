@@ -15,17 +15,19 @@ import (
 
 var (
 	modelID string
+	mode    string
 )
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "moz",
-		Short: "Moz — a personal, model-agnostic, agentic terminal",
+		Use:     "moz",
+		Short:   "Moz — a personal, model-agnostic, agentic terminal",
 		Version: version.Version,
-		RunE:  run,
+		RunE:    run,
 	}
 
-	rootCmd.Flags().StringVar(&modelID, "model", "", "model profile to use")
+	rootCmd.Flags().StringVar(&modelID, "model", "", "model profile to use (overrides adaptive)")
+	rootCmd.Flags().StringVar(&mode, "mode", "", "mode: adaptive, manual, or a profile id")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -60,6 +62,9 @@ func run(cmd *cobra.Command, args []string) error {
 
 	if modelID != "" {
 		cfg.DefaultModel = modelID
+		cfg.Mode = "manual"
+	} else if mode != "" {
+		cfg.Mode = mode
 	}
 
 	store := memory.New(cfg)
