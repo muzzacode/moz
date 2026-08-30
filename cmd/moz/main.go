@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,13 +10,16 @@ import (
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/runner"
 	"github.com/muzzacode/moz/internal/tui"
 	"github.com/muzzacode/moz/internal/version"
 )
 
 var (
-	modelID string
-	mode    string
+	modelID    string
+	mode       string
+	task       string
+	autoApprove bool
 )
 
 func main() {
@@ -28,6 +32,8 @@ func main() {
 
 	rootCmd.Flags().StringVar(&modelID, "model", "", "model profile to use (overrides adaptive)")
 	rootCmd.Flags().StringVar(&mode, "mode", "", "mode: adaptive, manual, or a profile id")
+	rootCmd.Flags().StringVar(&task, "task", "", "run a single task in headless mode and exit")
+	rootCmd.Flags().BoolVar(&autoApprove, "yes", false, "auto-approve all tool calls in headless mode")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -64,12 +70,24 @@ func run(cmd *cobra.Command, args []string) error {
 		cfg.DefaultModel = modelID
 		cfg.Mode = "manual"
 	} else if mode != "" {
-		cfg.Mode = mode
+		if mode == "adaptive" || mode == "manual" {
+			cfg.Mode = mode
+		} else {
+			cfg.DefaultModel = mode
+			cfg.Mode = "manual"
+		}
 	}
 
 	store := memory.New(cfg)
 	if err := store.Ensure(); err != nil {
 		return fmt.Errorf("failed to ensure memory dir: %w", err)
+	}
+
+	if task != "" {
+		if cfg.Agent {
+			cfg.Agent = false
+		}
+		return runner.RunTask(context.Background(), cfg, registry, store, task, autoApprove)
 	}
 
 	return tui.Run(cfg, registry, store)
