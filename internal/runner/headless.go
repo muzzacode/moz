@@ -62,7 +62,6 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 
 	go runner.Run(ctx, profile, task, session, out, approvalCh)
 
-	var final strings.Builder
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for ev := range out {
@@ -94,7 +93,7 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 				}
 			}
 		case "message":
-			final.WriteString(ev.Content)
+			fmt.Print(ev.Content)
 		case "error":
 			fmt.Fprintf(os.Stderr, "[error] %s\n", ev.Error)
 		case "usage":
@@ -102,8 +101,6 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 		}
 	}
 
-	if final.Len() > 0 {
-		fmt.Println(final.String())
-	}
+	fmt.Println()
 	return nil
 }
