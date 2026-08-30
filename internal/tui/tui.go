@@ -17,6 +17,7 @@ import (
 	"github.com/muzzacode/moz/internal/adaptive"
 	"github.com/muzzacode/moz/internal/agent"
 	"github.com/muzzacode/moz/internal/approval"
+	"github.com/muzzacode/moz/internal/checkpoint"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/cost"
 	"github.com/muzzacode/moz/internal/credentials"
@@ -36,15 +37,16 @@ var (
 )
 
 type Model struct {
-	cfg       *config.Config
-	registry  *models.Registry
-	store     *memory.Store
-	session   *memory.Session
-	creds     *credentials.Manager
-	router    *adaptive.Router
-	toolkit   *tools.Toolkit
-	todos     *todo.List
-	todoStore *todo.Store
+	cfg         *config.Config
+	registry    *models.Registry
+	store       *memory.Store
+	session     *memory.Session
+	creds       *credentials.Manager
+	router      *adaptive.Router
+	toolkit     *tools.Toolkit
+	todos       *todo.List
+	todoStore   *todo.Store
+	checkpoints *checkpoint.Store
 
 	profile      *models.Profile
 	mode         string
@@ -148,6 +150,8 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 		todos = todo.New()
 	}
 	toolkit := tools.New(safe, todos)
+	checkpoints := checkpoint.New()
+	toolkit.Checkpoints = checkpoints
 
 	profile, err := registry.Find(cfg.DefaultModel)
 	if err != nil {
@@ -184,6 +188,7 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 		creds:        creds,
 		router:       router,
 		toolkit:      toolkit,
+		checkpoints:  checkpoints,
 		todos:        todos,
 		todoStore:    todoStore,
 		profile:      profile,
@@ -398,6 +403,27 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		m.addSystem(m.store.Summary())
 		return m, nil
 
+	case "/undo":
+		if m.busy() {
+			m.errMsg = "cannot undo while a task is running; press esc first"
+			return m, nil
+		}
+		actions, err := m.checkpoints.UndoLast()
+		if err != nil && len(actions) == 0 {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Undid %d file change(s):", len(actions))
+		for _, a := range actions {
+			b.WriteString("\n  " + a)
+		}
+		if err != nil {
+			fmt.Fprintf(&b, "\n  (partial: %v)", err)
+		}
+		m.addSystem(b.String())
+		return m, nil
+
 	case "/sessions":
 		infos, err := m.store.SessionInfos()
 		if err != nil {
@@ -561,6 +587,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			content = strings.Join(args[1:], " ")
 		}
 		desc := fmt.Sprintf("write %s", path)
+		m.checkpoints.Begin("/write " + path)
 		return m.runWithApproval("write_file", desc, map[string]any{"path": path}, func() tea.Cmd {
 			if err := m.toolkit.WriteFile(path, content); err != nil {
 				m.errMsg = err.Error()
@@ -586,6 +613,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		oldStr := strings.TrimSpace(split[0])
 		newStr := strings.TrimSpace(split[1])
 		desc := fmt.Sprintf("edit %s", path)
+		m.checkpoints.Begin("/edit " + path)
 		return m.runWithApproval("edit_file", desc, map[string]any{"path": path}, func() tea.Cmd {
 			if err := m.toolkit.EditFile(path, oldStr, newStr); err != nil {
 				m.errMsg = err.Error()
@@ -641,7 +669,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/help":
-		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /sessions, /resume, /new, /clear, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit")
+		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /sessions, /resume, /new, /clear, /undo, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit\nEsc interrupts a running task. /undo reverses the last task's file changes.")
 		return m, nil
 
 	default:
@@ -831,6 +859,10 @@ func (m *Model) startAgent(input string) tea.Cmd {
 	reg := m.registry
 	runner := agent.New(cfg, reg, m.toolkit)
 	sess := m.session
+
+	// Group every file change made by this task so /undo reverses the task as
+	// a unit rather than one edit at a time.
+	m.checkpoints.Begin(truncate(input, 60))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel

@@ -88,6 +88,7 @@ In the TUI:
 - `/sessions` — list saved sessions newest-first.
 - `/resume [latest|session-id]` — continue a saved conversation.
 - `/new` or `/clear` — save the current conversation and start a new session.
+- `/undo` — reverse every file change made by the last task.
 - `/exit` — quit.
 
 Press `Esc` while a task is running to interrupt it. The conversation is kept, so you can correct course and continue instead of losing the session.
@@ -99,6 +100,9 @@ When the agent is on, Moz decides when to call tools. It can also `web_search` v
 - **Diff previews.** `edit_file` and `write_file` show a line-numbered preview of the real change before you approve it, and call out ambiguous or failing edits up front.
 - **Self-verification.** After the agent edits files, Moz runs the project's own verification command and hands any failure back to the model to fix. Detection prefers `make ci`/`check`/`verify`, then `make build`+`test`, then Go, Cargo, npm, or pytest.
 - **Context compaction.** Long sessions are summarized automatically so history stays inside the model's context window instead of overflowing it.
+- **Undo.** Every file the agent touches is snapshotted first, so `/undo` restores the previous state byte for byte, including file permissions.
+- **Native tool calling.** Providers that support structured tool calls use them directly; only models without native support are taught a text protocol.
+- **Automatic retries.** Rate limits and transient provider failures are retried with exponential backoff and jitter instead of losing the task.
 
 ### Modes
 

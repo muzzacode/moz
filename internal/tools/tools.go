@@ -34,9 +34,18 @@ type Match struct {
 	Content string `json:"content"`
 }
 
+// Recorder snapshots a file's state before it is modified, so changes can be
+// rolled back. It is an interface to keep tools decoupled from the checkpoint
+// implementation.
+type Recorder interface {
+	Record(path string) error
+}
+
 type Toolkit struct {
 	Safe  *safepath.Policy
 	Todos *todo.List
+	// Checkpoints, when set, receives a snapshot request before every write.
+	Checkpoints Recorder
 }
 
 func New(safe *safepath.Policy, todos *todo.List) *Toolkit {
@@ -44,6 +53,15 @@ func New(safe *safepath.Policy, todos *todo.List) *Toolkit {
 		todos = todo.New()
 	}
 	return &Toolkit{Safe: safe, Todos: todos}
+}
+
+// snapshot records the pre-change state of path. A snapshot failure must not
+// block the edit, but it does mean that edit cannot be undone.
+func (tk *Toolkit) snapshot(resolved string) {
+	if tk.Checkpoints == nil {
+		return
+	}
+	_ = tk.Checkpoints.Record(resolved)
 }
 
 func (tk *Toolkit) ReadFile(path string) (string, error) {
@@ -71,6 +89,7 @@ func (tk *Toolkit) WriteFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 		return err
 	}
+	tk.snapshot(p)
 	return writeAtomic(p, []byte(content), 0644)
 }
 
@@ -113,6 +132,7 @@ func (tk *Toolkit) editFile(path, oldStr, newStr string, replaceAll bool) error 
 	if err != nil {
 		return err
 	}
+	tk.snapshot(p)
 	return writeAtomic(p, []byte(updated), info.Mode().Perm())
 }
 

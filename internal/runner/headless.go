@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/muzzacode/moz/internal/agent"
+	"github.com/muzzacode/moz/internal/checkpoint"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
@@ -31,6 +32,12 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 	todoStore := todo.NewStore(cfg)
 	todos, _ := todoStore.Load()
 	tk := tools.New(safe, todos)
+
+	// Snapshots are recorded even in headless mode so a failed run can be
+	// inspected and reversed from the reported file list.
+	checkpoints := checkpoint.New()
+	checkpoints.Begin(task)
+	tk.Checkpoints = checkpoints
 
 	if len(files) > 0 {
 		var ctxB strings.Builder
