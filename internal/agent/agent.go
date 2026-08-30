@@ -171,7 +171,7 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 					continue
 				}
 			case <-ctx.Done():
-				out <- Event{Type: "error", Error: "cancelled", Elapsed: time.Since(start)}
+				out <- Event{Type: "cancelled", Step: "cancelled", Elapsed: time.Since(start)}
 				return
 			}
 

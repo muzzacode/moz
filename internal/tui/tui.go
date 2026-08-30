@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,52 @@ type Model struct {
 	currentStep   string
 	startTime     time.Time
 	elapsed       time.Duration
+
+	// cancel aborts the in-flight agent task or stream. Non-nil only while a
+	// task is running.
+	cancel context.CancelFunc
+}
+
+// busy reports whether a model request or agent task is in flight.
+func (m *Model) busy() bool {
+	return m.streaming || m.cancel != nil
+}
+
+// abort cancels the in-flight task without exiting the application.
+func (m *Model) abort(reason string) {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	// Release the agent if it is blocked waiting on an approval decision.
+	if m.agentApproval != nil {
+		select {
+		case m.agentApproval <- false:
+		default:
+		}
+	}
+	// Once aborted the update loop stops calling agentWait, so nothing would
+	// consume the agent's remaining events and its goroutine would block
+	// forever on send. Drain until it closes the channel.
+	if m.agentOut != nil {
+		go drain(m.agentOut, m.agentApproval)
+		m.agentOut = nil
+		m.agentApproval = nil
+	}
+	m.streaming = false
+	m.confirming = false
+	m.currentStep = ""
+	if m.pending != "" {
+		m.session.Messages = append(m.session.Messages, memory.Message{
+			Role:      "assistant",
+			Content:   m.pending,
+			Model:     m.profile.Name,
+			Timestamp: time.Now().UTC(),
+		})
+		m.pending = ""
+	}
+	m.addSystem(reason)
+	m.updateViewport()
 }
 
 var (
@@ -186,7 +233,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
-		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
+		// Esc interrupts the running task rather than killing the session, so a
+		// long agent run can be abandoned without losing the conversation.
+		case msg.Type == tea.KeyEsc:
+			if m.busy() {
+				m.abort("Interrupted")
+				return m, nil
+			}
+			m.saveSession()
+			return m, tea.Quit
+		case msg.Type == tea.KeyCtrlC:
+			if m.busy() {
+				m.abort("Interrupted (press Ctrl+C again to quit)")
+				return m, nil
+			}
 			m.saveSession()
 			return m, tea.Quit
 		case key.Matches(msg, enterBinding):
@@ -772,7 +832,10 @@ func (m *Model) startAgent(input string) tea.Cmd {
 	runner := agent.New(cfg, reg, m.toolkit)
 	sess := m.session
 
-	go runner.Run(context.Background(), m.profile, input, sess, m.agentOut, m.agentApproval)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	go runner.Run(ctx, m.profile, input, sess, m.agentOut, m.agentApproval)
 
 	return m.agentWait()
 }
@@ -870,8 +933,7 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return m, m.agentWait()
 
 	case "done":
-		m.streaming = false
-		m.currentStep = ""
+		m.finishTask()
 		if m.pending != "" {
 			m.session.Messages = append(m.session.Messages, memory.Message{
 				Role:      "assistant",
@@ -885,15 +947,53 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "warning":
+		m.addSystem(ev.Step)
+		return m, m.agentWait()
+
+	case "compacted":
+		m.addSystem(ev.Step)
+		return m, m.agentWait()
+
+	case "cancelled":
+		m.finishTask()
+		m.addSystem("Task cancelled")
+		m.updateViewport()
+		return m, nil
+
 	case "error":
-		m.streaming = false
-		m.currentStep = ""
+		m.finishTask()
 		m.errMsg = ev.Error
 		m.updateViewport()
 		return m, nil
 	}
 
 	return m, m.agentWait()
+}
+
+// drain consumes a cancelled agent's remaining events so its goroutine can
+// reach its deferred close instead of blocking on an unread channel. Approvals
+// are auto-denied because no user is watching any more.
+func drain(events <-chan agent.Event, approvals chan bool) {
+	for ev := range events {
+		if ev.Type != "tool_call" || approvals == nil {
+			continue
+		}
+		select {
+		case approvals <- false:
+		default:
+		}
+	}
+}
+
+// finishTask clears in-flight task state and releases the cancel function.
+func (m *Model) finishTask() {
+	m.streaming = false
+	m.currentStep = ""
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
 }
 
 func (m *Model) startStream() tea.Cmd {
@@ -908,8 +1008,11 @@ func (m *Model) startStream() tea.Cmd {
 	ch := make(chan llm.StreamEvent)
 	m.streamChan = ch
 
-	client := llm.New(m.profile, m.creds)
-	go client.ChatStream(context.Background(), m.session.Messages, ch)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	client := llm.New(m.profile, m.creds).WithTimeout(m.cfg.RequestTimeout())
+	go client.ChatStream(ctx, m.session.Messages, ch)
 
 	return waitForStream(ch)
 }
@@ -926,16 +1029,19 @@ func waitForStream(ch chan llm.StreamEvent) tea.Cmd {
 
 func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	if ev.Err != nil {
-		m.streaming = false
+		m.finishTask()
+		// A cancelled request is a user action, not an error to report.
+		if errors.Is(ev.Err, context.Canceled) {
+			m.updateViewport()
+			return m, nil
+		}
 		m.errMsg = ev.Err.Error()
-		m.currentStep = ""
 		m.updateViewport()
 		return m, nil
 	}
 
 	if ev.Done {
-		m.streaming = false
-		m.currentStep = ""
+		m.finishTask()
 		if m.pending != "" {
 			m.session.Messages = append(m.session.Messages, memory.Message{
 				Role:      "assistant",
@@ -1025,6 +1131,10 @@ func (m Model) View() string {
 	}
 	if m.todos.PendingCount() > 0 {
 		status.WriteString(fmt.Sprintf("| todos: %d ", m.todos.PendingCount()))
+	}
+	// Surface the interrupt affordance only while it applies.
+	if m.busy() {
+		status.WriteString("| esc: interrupt ")
 	}
 
 	bar := statusStyle.Width(m.viewport.Width).Render(status.String())
