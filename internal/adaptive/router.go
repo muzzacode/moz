@@ -74,7 +74,7 @@ func (rt *Router) Select(prompt string) (*Decision, error) {
 }
 
 func (rt *Router) isAvailable(p *models.Profile) bool {
-	if p.ProviderKind == models.ProviderAnthropic || p.ProviderKind == models.ProviderGoogle {
+	if p.ProviderKind == models.ProviderGoogle {
 		// Not implemented yet; avoid false availability.
 		return false
 	}
@@ -85,4 +85,8 @@ func (rt *Router) isAvailable(p *models.Profile) bool {
 		return rt.Credentials.Has(p.APIKeyCredential)
 	}
 	return false
+}
+
+func (rt *Router) Available(p *models.Profile) bool {
+	return rt.isAvailable(p)
 }

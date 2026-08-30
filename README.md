@@ -56,6 +56,7 @@ In the TUI:
 
 - Type a message and press `Enter` to chat.
 - `Shift+Enter` — insert a newline.
+- `/models` — list profiles and API key availability.
 - `/mode adaptive` — let Moz pick the model per task.
 - `/mode manual` — lock the current model.
 - `/mode <profile-id>` or `/model <id>` — switch model manually.

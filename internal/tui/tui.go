@@ -498,6 +498,10 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			return nil
 		})
 
+	case "/models":
+		m.addSystem(m.renderModels())
+		return m, nil
+
 	case "/set":
 		if len(args) < 2 {
 			m.errMsg = "usage: /set <key> <value>"
@@ -586,6 +590,19 @@ func (m *Model) runWithApproval(tool, description string, params map[string]any,
 	default:
 		return m, fn()
 	}
+}
+
+func (m *Model) renderModels() string {
+	var b strings.Builder
+	b.WriteString("## Models\n")
+	for _, p := range m.registry.List() {
+		available := "no"
+		if m.router.Available(&p) {
+			available = "yes"
+		}
+		b.WriteString(fmt.Sprintf("- %s (%s) | %s | key: %s | available: %s\n", p.ID, p.Name, p.ProviderKind, p.APIKeyCredential, available))
+	}
+	return b.String()
 }
 
 func (m *Model) handleTodo(args []string) (tea.Model, tea.Cmd) {
