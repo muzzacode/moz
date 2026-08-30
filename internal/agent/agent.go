@@ -73,7 +73,7 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 
 	client := llm.New(profile, r.Creds)
 
-	maxTurns := 5
+	maxTurns := 15
 	for turn := 0; turn < maxTurns; turn++ {
 		turnStart := time.Now()
 		out <- Event{Type: "step", Step: fmt.Sprintf("turn %d: reasoning", turn+1), Model: profile.Name, Elapsed: time.Since(start)}
