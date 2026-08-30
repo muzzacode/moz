@@ -50,8 +50,11 @@ This installs the required foundation tooling without changing global system def
 ```bash
 moz                          # start interactive TUI
 moz --model qwen2.5-coder:14b
-moz --model claude-sonnet-5  # requires ANTHROPIC_API_KEY
+moz --model claude-sonnet-5  # requires ANTHROPIC_API_KEY + ANTHROPIC_WORKSPACE_ID
 moz --help
+
+# run one task in headless mode
+moz --model openrouter-default --task "add a help target to the Makefile" --yes
 
 # install to ~/.local/bin
 make install
