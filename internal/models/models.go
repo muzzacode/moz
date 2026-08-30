@@ -152,10 +152,10 @@ func DefaultProfiles() *Registry {
 				},
 			},
 			{
-				ID:           "claude-sonnet-4",
-				Name:         "Claude Sonnet 4",
+				ID:           "claude-sonnet-5",
+				Name:         "Claude Sonnet 5",
 				ProviderKind: ProviderAnthropic,
-				Model:        "claude-sonnet-4-20250801",
+				Model:        "claude-sonnet-5",
 				APIKeyCredential: "ANTHROPIC_API_KEY",
 				Capabilities: []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
 				ContextLength: 200000,
@@ -184,11 +184,11 @@ func DefaultProfiles() *Registry {
 		Stacks: []Stack{
 			{Name: "daily", Class: TaskQuickChat, Profiles: []string{"general-default", "coding-default"}},
 			{Name: "chat", Class: TaskChat, Profiles: []string{"general-default"}},
-			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-4"}},
-			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-4"}},
-			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-4"}},
-			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-4"}},
-			{Name: "vision", Class: TaskVision, Profiles: []string{"vision-default", "claude-sonnet-4"}},
+			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "vision", Class: TaskVision, Profiles: []string{"vision-default", "claude-sonnet-5"}},
 		},
 	}
 }

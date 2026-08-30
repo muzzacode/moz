@@ -45,7 +45,11 @@ This installs the required foundation tooling without changing global system def
 ```bash
 moz                          # start interactive TUI
 moz --model qwen2.5-coder:14b
+moz --model claude-sonnet-5  # requires ANTHROPIC_API_KEY
 moz --help
+
+# install to ~/.local/bin
+make install
 ```
 
 In the TUI:
@@ -92,9 +96,23 @@ approval:
   git: always
 ```
 
+Set cloud API keys via environment or the TUI:
+
+```bash
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...
+export OPENROUTER_API_KEY=...
+```
+
+Or inside Moz:
+
+```
+/set ANTHROPIC_API_KEY your-key
+```
+
 ## Project status
 
-Phase 5 done: agent loop with planning/todo system (`add_todo`, `list_todos`, `mark_done`), `web_search`, `write_file`, `edit_file`, per-tool aliases, and a separate `edit` approval level.
+Phase 6 in progress: Claude (Anthropic) support, keychain credential storage, and `make install`.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e

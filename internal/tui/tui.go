@@ -480,8 +480,22 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 	case "/todo":
 		return m.handleTodo(args)
 
+	case "/set":
+		if len(args) < 2 {
+			m.errMsg = "usage: /set <key> <value>"
+			return m, nil
+		}
+		key := args[0]
+		value := strings.Join(args[1:], " ")
+		if err := m.creds.Save(key, value); err != nil {
+			m.errMsg = err.Error()
+		} else {
+			m.addSystem(fmt.Sprintf("Saved credential %s", key))
+		}
+		return m, nil
+
 	case "/help":
-		m.addSystem("Commands: /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /todo, /exit")
+		m.addSystem("Commands: /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /todo, /set, /exit")
 		return m, nil
 
 	default:

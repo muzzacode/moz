@@ -46,6 +46,14 @@ func New(p *models.Profile, cm *credentials.Manager) *Client {
 	return &Client{Profile: p, Credentials: cm}
 }
 
+func (c *Client) isAnthropic() bool {
+	return c.Profile.ProviderKind == models.ProviderAnthropic
+}
+
+func (c *Client) anthropicClient() (*AnthropicClient, error) {
+	return newAnthropicClient(c.Profile, c.Credentials)
+}
+
 func (c *Client) apiClient() (*openai.Client, error) {
 	if !c.Profile.CanUseOpenAIClient() {
 		return nil, fmt.Errorf("provider %s is not supported yet", c.Profile.ProviderKind)
@@ -203,6 +211,14 @@ func parseContentToolCalls(content string) []ToolCall {
 }
 
 func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs []tools.Definition) (*ChatResponse, error) {
+	if c.isAnthropic() {
+		client, err := c.anthropicClient()
+		if err != nil {
+			return nil, err
+		}
+		return client.Chat(ctx, messages, toolDefs)
+	}
+
 	client, err := c.apiClient()
 	if err != nil {
 		return nil, err
@@ -248,6 +264,16 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 
 func (c *Client) ChatStream(ctx context.Context, messages []memory.Message, out chan<- StreamEvent) {
 	defer close(out)
+
+	if c.isAnthropic() {
+		client, err := c.anthropicClient()
+		if err != nil {
+			out <- StreamEvent{Err: err}
+			return
+		}
+		client.ChatStream(ctx, messages, out)
+		return
+	}
 
 	client, err := c.apiClient()
 	if err != nil {

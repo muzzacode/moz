@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 BINARY := moz
-INSTALL_DIR := /usr/local/bin
+INSTALL_DIR := $(HOME)/.local/bin
 
 .PHONY: build install uninstall run test clean bootstrap
 
