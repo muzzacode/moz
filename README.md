@@ -67,7 +67,7 @@ In the TUI:
 - `/clear` — start a new session.
 - `/exit` — quit.
 
-When the agent is on, Moz decides when to call tools. Each tool call is shown in the chat, and destructive tools ask for approval.
+When the agent is on, Moz decides when to call tools. Each tool call is shown in the chat, and destructive tools ask for approval. The agent can also `web_search` the web via DuckDuckGo when it needs external information.
 
 ### Modes
 

@@ -83,6 +83,60 @@ func Definitions() []Definition {
 			},
 		},
 		{
+			Name:        "write_file",
+			Description: "Write or overwrite a file. Use this to create new files.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]string{
+						"type":        "string",
+						"description": "File path",
+					},
+					"content": map[string]string{
+						"type":        "string",
+						"description": "Full file content",
+					},
+				},
+				"required": []string{"path", "content"},
+			},
+		},
+		{
+			Name:        "edit_file",
+			Description: "Replace an exact string in a file with a new string. Use this for small, targeted changes.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]string{
+						"type":        "string",
+						"description": "File path",
+					},
+					"old_string": map[string]string{
+						"type":        "string",
+						"description": "Exact existing text to replace",
+					},
+					"new_string": map[string]string{
+						"type":        "string",
+						"description": "New text to insert",
+					},
+				},
+				"required": []string{"path", "old_string", "new_string"},
+			},
+		},
+		{
+			Name:        "web_search",
+			Description: "Search the web for a query. Use this to look up documentation, recent facts, or external resources.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]string{
+						"type":        "string",
+						"description": "The search query",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
 			Name:        "git_diff",
 			Description: "Show the git diff of a repository.",
 			Parameters: map[string]interface{}{

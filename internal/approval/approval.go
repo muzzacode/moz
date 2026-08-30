@@ -17,27 +17,50 @@ const (
 )
 
 type Policy struct {
-	Read Level `yaml:"read"`
+	Read  Level `yaml:"read"`
 	Write Level `yaml:"write"`
-	Exec Level `yaml:"exec"`
-	Git  Level `yaml:"git"`
+	Edit  Level `yaml:"edit"`
+	Exec  Level `yaml:"exec"`
+	Git   Level `yaml:"git"`
 }
 
 func Default() *Policy {
 	return &Policy{
-		Read: LevelAlways,
+		Read:  LevelAlways,
 		Write: LevelAsk,
-		Exec: LevelAsk,
-		Git: LevelAlways,
+		Edit:  LevelAsk,
+		Exec:  LevelAsk,
+		Git:   LevelAlways,
+	}
+}
+
+func (p *Policy) ensureDefaults() {
+	if p.Read == "" {
+		p.Read = LevelAlways
+	}
+	if p.Write == "" {
+		p.Write = LevelAsk
+	}
+	if p.Edit == "" {
+		p.Edit = LevelAsk
+	}
+	if p.Exec == "" {
+		p.Exec = LevelAsk
+	}
+	if p.Git == "" {
+		p.Git = LevelAlways
 	}
 }
 
 func (p *Policy) For(tool string) Level {
+	p.ensureDefaults()
 	switch tool {
-	case "read_file", "list_dir", "grep", "git_status", "git_diff":
+	case "read_file", "list_dir", "grep", "git_status", "git_diff", "web_search":
 		return p.Read
-	case "write_file", "edit_file":
+	case "write_file":
 		return p.Write
+	case "edit_file":
+		return p.Edit
 	case "exec", "bash":
 		return p.Exec
 	case "git_commit", "git_push", "git_pull":

@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type ToolCall struct {
@@ -18,7 +19,39 @@ type ToolResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+var toolAliases = map[string]string{
+	"read_file":      "read_file",
+	"read":           "read_file",
+	"list_dir":       "list_dir",
+	"list_directory": "list_dir",
+	"ls":             "list_dir",
+	"grep":           "grep",
+	"search":         "grep",
+	"search_files":   "grep",
+	"exec":           "exec",
+	"run":            "exec",
+	"command":        "exec",
+	"write_file":     "write_file",
+	"write":          "write_file",
+	"edit_file":      "edit_file",
+	"edit":           "edit_file",
+	"replace":        "edit_file",
+	"git_status":     "git_status",
+	"git_diff":       "git_diff",
+	"git_commit":     "git_commit",
+	"web_search":     "web_search",
+	"search_web":     "web_search",
+}
+
+func resolveToolName(name string) string {
+	if n, ok := toolAliases[strings.ToLower(strings.TrimSpace(name))]; ok {
+		return n
+	}
+	return name
+}
+
 func (tk *Toolkit) Execute(call ToolCall) ToolResult {
+	call.Name = resolveToolName(call.Name)
 	tr := ToolResult{ID: call.ID, Name: call.Name}
 
 	switch call.Name {
@@ -90,6 +123,64 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 		if res.Error != "" {
 			tr.Error = res.Error
 		}
+
+	case "write_file":
+		var args struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		if err := tk.WriteFile(args.Path, args.Content); err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		tr.Content = fmt.Sprintf("wrote %s", args.Path)
+
+	case "edit_file":
+		var args struct {
+			Path      string `json:"path"`
+			OldString string `json:"old_string"`
+			NewString string `json:"new_string"`
+		}
+		// Also accept old/new as a fallback.
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			var fallback struct {
+				Path string `json:"path"`
+				Old  string `json:"old"`
+				New  string `json:"new"`
+			}
+			if err2 := json.Unmarshal(call.Arguments, &fallback); err2 != nil {
+				tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+				return tr
+			}
+			args.Path = fallback.Path
+			args.OldString = fallback.Old
+			args.NewString = fallback.New
+		}
+		if err := tk.EditFile(args.Path, args.OldString, args.NewString); err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		tr.Content = fmt.Sprintf("edited %s", args.Path)
+
+	case "web_search":
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		results, err := tk.WebSearch(args.Query)
+		if err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		data, _ := json.MarshalIndent(results, "", "  ")
+		tr.Content = string(data)
 
 	case "git_status":
 		var args struct {

@@ -121,6 +121,20 @@ func (c *Client) buildRequest(messages []memory.Message, toolDefs []tools.Defini
 	return req
 }
 
+type rawCall struct {
+	Name       string          `json:"name"`
+	Arguments  json.RawMessage `json:"arguments"`
+	Parameters json.RawMessage `json:"parameters"`
+}
+
+func (r rawCall) toToolCall(id string) ToolCall {
+	args := r.Arguments
+	if len(args) == 0 && len(r.Parameters) > 0 {
+		args = r.Parameters
+	}
+	return ToolCall{ID: id, Name: r.Name, Arguments: args}
+}
+
 func parseContentToolCalls(content string) []ToolCall {
 	if content == "" {
 		return nil
@@ -152,40 +166,37 @@ func parseContentToolCalls(content string) []ToolCall {
 	}
 	data := []byte(content[start:])
 
+	now := time.Now().UnixNano()
+
 	// Try an array of tool calls.
-	var arr []ToolCall
 	if data[0] == '[' {
+		var arr []rawCall
 		if err := json.Unmarshal(data, &arr); err == nil && len(arr) > 0 && arr[0].Name != "" {
-			for i := range arr {
-				if arr[i].ID == "" {
-					arr[i].ID = fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), i)
-				}
+			calls := make([]ToolCall, 0, len(arr))
+			for i, r := range arr {
+				calls = append(calls, r.toToolCall(fmt.Sprintf("call_%d_%d", now, i)))
 			}
-			return arr
+			return calls
 		}
 		return nil
 	}
 
 	// Try a wrapper object with a tool_calls field.
 	var wrapper struct {
-		ToolCalls []ToolCall `json:"tool_calls"`
+		ToolCalls []rawCall `json:"tool_calls"`
 	}
 	if err := json.Unmarshal(data, &wrapper); err == nil && len(wrapper.ToolCalls) > 0 {
-		for i := range wrapper.ToolCalls {
-			if wrapper.ToolCalls[i].ID == "" {
-				wrapper.ToolCalls[i].ID = fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), i)
-			}
+		calls := make([]ToolCall, 0, len(wrapper.ToolCalls))
+		for i, r := range wrapper.ToolCalls {
+			calls = append(calls, r.toToolCall(fmt.Sprintf("call_%d_%d", now, i)))
 		}
-		return wrapper.ToolCalls
+		return calls
 	}
 
 	// Try a single tool call object.
-	var single ToolCall
+	var single rawCall
 	if err := json.Unmarshal(data, &single); err == nil && single.Name != "" {
-		if single.ID == "" {
-			single.ID = fmt.Sprintf("call_%d", time.Now().UnixNano())
-		}
-		return []ToolCall{single}
+		return []ToolCall{single.toToolCall(fmt.Sprintf("call_%d", now))}
 	}
 
 	return nil
