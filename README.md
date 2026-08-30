@@ -60,6 +60,10 @@ moz --model openrouter-default --task "add a help target to the Makefile" --yes
 
 # install to ~/.local/bin
 make install
+
+# shell completion
+source <(moz completion bash)   # bash
+moz completion zsh > "${fpath[1]}/_moz"  # zsh
 ```
 
 In the TUI:
