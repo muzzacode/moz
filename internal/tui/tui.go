@@ -517,7 +517,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/help":
-		m.addSystem("Commands: /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /todo, /set, /exit")
+		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit")
 		return m, nil
 
 	default:
