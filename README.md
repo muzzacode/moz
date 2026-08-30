@@ -113,7 +113,7 @@ Or inside Moz:
 
 ## Project status
 
-Phase 6 in progress: Claude (Anthropic) support, keychain credential storage, and `make install`.
+Phase 6 in progress: Claude, keychain credentials, `make install`, web_fetch, and live cost estimates.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e

@@ -17,6 +17,7 @@ import (
 	"github.com/muzzacode/moz/internal/agent"
 	"github.com/muzzacode/moz/internal/approval"
 	"github.com/muzzacode/moz/internal/config"
+	"github.com/muzzacode/moz/internal/cost"
 	"github.com/muzzacode/moz/internal/credentials"
 	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
@@ -25,6 +26,7 @@ import (
 	"github.com/muzzacode/moz/internal/todo"
 	"github.com/muzzacode/moz/internal/tools"
 	"github.com/muzzacode/moz/internal/version"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 var (
@@ -54,6 +56,7 @@ type Model struct {
 	streamChan chan llm.StreamEvent
 	pending    string
 	errMsg     string
+	totalUsage openai.Usage
 
 	confirming   bool
 	confirmText  string
@@ -67,7 +70,6 @@ type Model struct {
 	currentStep   string
 	startTime     time.Time
 	elapsed       time.Duration
-	totalTokens   int
 }
 
 var (
@@ -679,7 +681,7 @@ func (m *Model) startAgent(input string) tea.Cmd {
 	m.startTime = time.Now()
 	m.currentStep = "starting"
 	m.elapsed = 0
-	m.totalTokens = 0
+	m.totalUsage = openai.Usage{}
 
 	m.agentOut = make(chan agent.Event)
 	m.agentApproval = make(chan bool)
@@ -711,9 +713,9 @@ func (m *Model) agentWait() tea.Cmd {
 func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	m.currentStep = ev.Step
 	m.elapsed = ev.Elapsed
-	if ev.Usage > 0 {
-		m.totalTokens += ev.Usage
-	}
+	m.totalUsage.PromptTokens += ev.Usage.PromptTokens
+	m.totalUsage.CompletionTokens += ev.Usage.CompletionTokens
+	m.totalUsage.TotalTokens += ev.Usage.TotalTokens
 
 	switch ev.Type {
 	case "step":
@@ -820,7 +822,7 @@ func (m *Model) startStream() tea.Cmd {
 	m.startTime = time.Now()
 	m.currentStep = "streaming"
 	m.elapsed = 0
-	m.totalTokens = 0
+	m.totalUsage = openai.Usage{}
 
 	ch := make(chan llm.StreamEvent)
 	m.streamChan = ch
@@ -934,8 +936,11 @@ func (m Model) View() string {
 	if m.elapsed > 0 {
 		status.WriteString(fmt.Sprintf("| time: %s ", m.elapsed.Round(time.Millisecond)))
 	}
-	if m.totalTokens > 0 {
-		status.WriteString(fmt.Sprintf("| tokens: %d ", m.totalTokens))
+	if m.totalUsage.TotalTokens > 0 {
+		status.WriteString(fmt.Sprintf("| tokens: %d ", m.totalUsage.TotalTokens))
+	}
+	if costStr := cost.Format(m.profile.ID, m.totalUsage); costStr != "" {
+		status.WriteString(fmt.Sprintf("| cost: %s ", costStr))
 	}
 	if m.todos.PendingCount() > 0 {
 		status.WriteString(fmt.Sprintf("| todos: %d ", m.todos.PendingCount()))

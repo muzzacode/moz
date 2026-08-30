@@ -12,6 +12,7 @@ import (
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
 	"github.com/muzzacode/moz/internal/tools"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 type Event struct {
@@ -22,7 +23,7 @@ type Event struct {
 	ToolResult *tools.ToolResult
 	Model      string
 	Elapsed    time.Duration
-	Usage      int // total tokens if known
+	Usage      openai.Usage
 	Error      string
 }
 
@@ -83,7 +84,7 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 			return
 		}
 
-		out <- Event{Type: "usage", Usage: resp.Usage.TotalTokens, Elapsed: time.Since(start)}
+		out <- Event{Type: "usage", Usage: resp.Usage, Elapsed: time.Since(start)}
 
 		if len(resp.ToolCalls) == 0 {
 			// Final answer. Stream it for nicer UI.
