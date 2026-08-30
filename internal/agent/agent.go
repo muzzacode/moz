@@ -66,25 +66,37 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 
 	out <- Event{Type: "step", Step: "planning", Model: profile.Name, Elapsed: time.Since(start)}
 
+	verifyState := newVerifyState(r.Config)
+
 	// Build messages: system prompt + session + user task.
 	messages := append([]memory.Message{}, session.Messages...)
 	messages = append(messages, memory.Message{Role: "user", Content: task})
 
-	systemPrompt := buildSystemPrompt()
+	systemPrompt := appendProjectContext(
+		buildSystemPrompt(profile.SupportsNativeTools()),
+		verifyState.command,
+	)
 	messages = prependMessage(messages, memory.Message{Role: "system", Content: systemPrompt})
 
 	client := llm.New(profile, r.Creds)
 	if r.Config != nil {
 		client = client.WithTimeout(r.Config.RequestTimeout())
 	}
+	// Surface retries so a rate-limited provider looks like progress rather
+	// than a hang.
+	client = client.WithRetry(0, func(n llm.RetryNotice) {
+		out <- Event{
+			Type:    "warning",
+			Step:    fmt.Sprintf("provider error, retrying in %s (attempt %d/%d)", n.Delay.Round(time.Millisecond), n.Attempt, n.Max),
+			Elapsed: time.Since(start),
+		}
+	})
 	toolDefs := tools.Definitions()
 	compactCfg := compact.DefaultConfig(profile.ContextLength)
 	// Tool schemas are re-sent on every request and are invisible in the
 	// message list, so they must be charged against the budget explicitly.
 	compactCfg.FixedOverhead = tokens.EstimateJSON(toolDefs)
 	compactor := compact.New(compactCfg, client)
-
-	verifyState := newVerifyState(r.Config)
 
 	maxTurns := r.maxTurns()
 	for turn := 0; turn < maxTurns; turn++ {
@@ -221,40 +233,6 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 	}
 
 	out <- Event{Type: "error", Error: "reached maximum agent turns", Elapsed: time.Since(start)}
-}
-
-func buildSystemPrompt() string {
-	return `You are Moz, an agentic coding assistant running in a terminal. You have access to these tools:
-- read_file(path)
-- list_dir(path)
-- grep(pattern, path)
-- web_search(query)
-- exec(command)
-- git_status(cwd)
-- git_diff(cwd)
-- write_file(path, content)  // create a new file only; never overwrite
-- edit_file(path, old_string, new_string, replace_all?)
-- add_todo(text)
-- list_todos()
-- mark_done(id)
-
-Rules:
-1. For multi-step tasks, first create a plan using add_todo. As you finish each step, call mark_done. Call list_todos if you need to see the current plan.
-2. Use the fewest tools possible.
-3. To create a new file, use write_file. NEVER overwrite an existing file with write_file, and NEVER use exec with echo or redirection.
-4. To change a file, use edit_file. Include enough surrounding context so old_string is unique unless replace_all is true. NEVER use sed or sed inside exec.
-5. exec is only for commands like git, go, ls, make, tests, etc.
-6. Prefer reading/grepping before running commands.
-
-When you need a tool, you MUST respond with ONLY a JSON object in one of these exact forms, with no explanation before or after:
-
-Single tool:
-{"name": "list_dir", "arguments": {"path": "."}}
-
-Multiple tools:
-{"tool_calls": [{"name": "grep", "arguments": {"pattern": "func", "path": "."}}, {"name": "read_file", "arguments": {"path": "main.go"}}]}
-
-Use the exact tool names listed above. When you have enough information to answer, respond in plain text with a concise answer.`
 }
 
 func prependMessage(msgs []memory.Message, m memory.Message) []memory.Message {

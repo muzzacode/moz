@@ -43,6 +43,30 @@ type Client struct {
 	Credentials *credentials.Manager
 	// Timeout bounds each request. Zero uses DefaultRequestTimeout.
 	Timeout time.Duration
+	// MaxRetries bounds transient-failure retries. Negative disables retrying;
+	// zero uses DefaultMaxRetries.
+	MaxRetries int
+	// Notify reports retry attempts so the UI can show progress.
+	Notify OnRetry
+}
+
+// WithRetry returns a copy of the client using the supplied retry budget and
+// notification callback.
+func (c *Client) WithRetry(maxRetries int, notify OnRetry) *Client {
+	clone := *c
+	clone.MaxRetries = maxRetries
+	clone.Notify = notify
+	return &clone
+}
+
+func (c *Client) retries() int {
+	if c.MaxRetries < 0 {
+		return 0
+	}
+	if c.MaxRetries == 0 {
+		return DefaultMaxRetries
+	}
+	return c.MaxRetries
 }
 
 func New(p *models.Profile, cm *credentials.Manager) *Client {
@@ -241,13 +265,15 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 		if err != nil {
 			return nil, err
 		}
-		reqCtx, cancel := c.withDeadline(ctx)
-		defer cancel()
-		resp, err := client.Chat(reqCtx, messages, toolDefs)
-		if err != nil {
-			return nil, annotateTimeout(ctx, reqCtx, c.timeout(), err)
-		}
-		return resp, nil
+		return withRetry(ctx, c.retries(), c.Notify, func() (*ChatResponse, error) {
+			reqCtx, cancel := c.withDeadline(ctx)
+			defer cancel()
+			resp, err := client.Chat(reqCtx, messages, toolDefs)
+			if err != nil {
+				return nil, annotateTimeout(ctx, reqCtx, c.timeout(), err)
+			}
+			return resp, nil
+		})
 	}
 
 	client, err := c.apiClient()
@@ -255,13 +281,18 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 		return nil, err
 	}
 
-	reqCtx, cancel := c.withDeadline(ctx)
-	defer cancel()
-
 	req := c.buildRequest(messages, toolDefs)
-	resp, err := client.CreateChatCompletion(reqCtx, req)
+	resp, err := withRetry(ctx, c.retries(), c.Notify, func() (openai.ChatCompletionResponse, error) {
+		reqCtx, cancel := c.withDeadline(ctx)
+		defer cancel()
+		r, err := client.CreateChatCompletion(reqCtx, req)
+		if err != nil {
+			return r, annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("chat request failed: %w", err))
+		}
+		return r, nil
+	})
 	if err != nil {
-		return nil, annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("chat request failed: %w", err))
+		return nil, err
 	}
 
 	if len(resp.Choices) == 0 {
@@ -285,8 +316,12 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 		})
 	}
 
-	// Fallback for local models that emit tool calls as plain JSON in content.
-	if len(cr.ToolCalls) == 0 && cr.Content != "" {
+	// Fallback for models that emit tool calls as JSON in the message body.
+	//
+	// This is deliberately skipped for providers with native tool calling: a
+	// legitimate answer that merely contains JSON, such as explaining a config
+	// file, would otherwise be misread as a tool call.
+	if len(cr.ToolCalls) == 0 && cr.Content != "" && !c.Profile.SupportsNativeTools() {
 		if calls := parseContentToolCalls(cr.Content); len(calls) > 0 {
 			cr.ToolCalls = calls
 			cr.Content = ""
@@ -321,9 +356,17 @@ func (c *Client) ChatStream(ctx context.Context, messages []memory.Message, out 
 	req := c.buildRequest(messages, nil)
 	req.Stream = true
 
-	stream, err := client.CreateChatCompletionStream(reqCtx, req)
+	// Only stream creation is retried. Once tokens have been emitted a retry
+	// would duplicate output, so mid-stream failures are surfaced as-is.
+	stream, err := withRetry(ctx, c.retries(), c.Notify, func() (*openai.ChatCompletionStream, error) {
+		s, err := client.CreateChatCompletionStream(reqCtx, req)
+		if err != nil {
+			return nil, annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("failed to start stream: %w", err))
+		}
+		return s, nil
+	})
 	if err != nil {
-		out <- StreamEvent{Err: annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("failed to start stream: %w", err))}
+		out <- StreamEvent{Err: err}
 		return
 	}
 	defer stream.Close()

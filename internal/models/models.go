@@ -51,6 +51,36 @@ func (p *Profile) CanUseOpenAIClient() bool {
 		p.ProviderKind == ProviderOpenRouter
 }
 
+func (p *Profile) Has(c Capability) bool {
+	for _, have := range p.Capabilities {
+		if have == c {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportsNativeTools reports whether the provider will return structured tool
+// calls, so the model does not need to be taught a JSON output contract.
+//
+// Asking a model to emit bare JSON *and* passing it native tool schemas gives
+// it two conflicting instructions, which is a major source of malformed calls.
+func (p *Profile) SupportsNativeTools() bool {
+	if !p.Has(CapToolCalling) {
+		return false
+	}
+	switch p.ProviderKind {
+	case ProviderAnthropic, ProviderOpenAICompatible, ProviderOpenRouter:
+		return true
+	case ProviderOllama:
+		// Ollama's OpenAI-compatible layer supports tools, but coverage varies
+		// by model, so the text-JSON fallback is retained for local models.
+		return false
+	default:
+		return false
+	}
+}
+
 type Stack struct {
 	Name     string    `yaml:"name"`
 	Class    TaskClass `yaml:"class"`
