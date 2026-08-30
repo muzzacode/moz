@@ -480,6 +480,22 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 	case "/todo":
 		return m.handleTodo(args)
 
+	case "/fetch":
+		if len(args) < 1 {
+			m.errMsg = "usage: /fetch <url>"
+			return m, nil
+		}
+		return m.runWithApproval("web_fetch", args[0], map[string]any{"url": args[0]}, func() tea.Cmd {
+			content, err := m.toolkit.WebFetch(args[0])
+			if err != nil {
+				m.errMsg = err.Error()
+				m.updateViewport()
+				return nil
+			}
+			m.addSystem(truncate(content, 6000))
+			return nil
+		})
+
 	case "/set":
 		if len(args) < 2 {
 			m.errMsg = "usage: /set <key> <value>"

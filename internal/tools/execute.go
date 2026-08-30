@@ -41,6 +41,8 @@ var toolAliases = map[string]string{
 	"git_commit":     "git_commit",
 	"web_search":     "web_search",
 	"search_web":     "web_search",
+	"web_fetch":      "web_fetch",
+	"fetch_url":      "web_fetch",
 	"add_todo":       "add_todo",
 	"list_todos":     "list_todos",
 	"mark_done":      "mark_done",
@@ -185,6 +187,21 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 		}
 		data, _ := json.MarshalIndent(results, "", "  ")
 		tr.Content = string(data)
+
+	case "web_fetch":
+		var args struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		content, err := tk.WebFetch(args.URL)
+		if err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		tr.Content = content
 
 	case "add_todo":
 		var args struct {

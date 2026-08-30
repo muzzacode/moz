@@ -106,6 +106,20 @@ func Definitions() []Definition {
 			},
 		},
 		{
+			Name:        "web_fetch",
+			Description: "Fetch the content of a URL and return it as readable text. Use this when you need to read a specific web page.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]string{
+						"type":        "string",
+						"description": "The URL to fetch",
+					},
+				},
+				"required": []string{"url"},
+			},
+		},
+		{
 			Name:        "git_status",
 			Description: "Show the git status of a repository.",
 			Parameters: map[string]interface{}{

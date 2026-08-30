@@ -162,3 +162,70 @@ func hasClass(n *html.Node, class string) bool {
 	}
 	return false
 }
+
+// WebFetch fetches a URL and returns the readable text.
+func (tk *Toolkit) WebFetch(u string) (string, error) {
+	if u == "" {
+		return "", fmt.Errorf("empty URL")
+	}
+
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.TextNode {
+			text := strings.TrimSpace(n.Data)
+			if text != "" {
+				b.WriteString(text)
+				b.WriteString(" ")
+			}
+		}
+		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript") {
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+		if n.Type == html.ElementNode && (n.Data == "p" || n.Data == "div" || n.Data == "br" || n.Data == "h1" || n.Data == "h2" || n.Data == "h3" || n.Data == "h4" || n.Data == "li") {
+			if b.Len() > 0 && b.String()[b.Len()-1] != '\n' {
+				b.WriteString("\n")
+			}
+		}
+	}
+	walk(doc)
+
+	text := strings.Join(strings.Fields(b.String()), " ")
+	return truncateText(text, 20000), nil
+}
+
+func truncateText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n... (truncated)"
+}

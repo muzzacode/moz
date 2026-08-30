@@ -67,6 +67,7 @@ In the TUI:
 - `/write <path> <content>` — write a file (asks for approval).
 - `/edit <path> <old> -> <new>` — replace text in a file (asks for approval).
 - `/git status | diff | commit <msg>` — run git commands.
+- `/fetch <url>` — read a web page.
 - `/todo [add|done|remove|clear|list]` — manage session todos.
 - `/memory` — show current session memory summary.
 - `/clear` — start a new session.
