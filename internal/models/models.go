@@ -209,6 +209,21 @@ func DefaultProfiles() *Registry {
 				},
 			},
 			{
+				ID:               "openrouter-fast",
+				Name:             "OpenRouter Fast",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "qwen/qwen3.7-flash",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
+				ContextLength:    1000000,
+				CostTier:         "cloud-cheap",
+				DefaultParams: map[string]any{
+					"temperature": 0.4,
+					"max_tokens":  4096,
+				},
+			},
+			{
 				ID:               "openrouter-free",
 				Name:             "OpenRouter Free",
 				ProviderKind:     ProviderOpenRouter,
@@ -227,10 +242,10 @@ func DefaultProfiles() *Registry {
 		Stacks: []Stack{
 			{Name: "daily", Class: TaskQuickChat, Profiles: []string{"general-default", "coding-default"}},
 			{Name: "chat", Class: TaskChat, Profiles: []string{"general-default"}},
-			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
 			{Name: "vision", Class: TaskVision, Profiles: []string{"vision-default", "openrouter-default", "claude-sonnet-5"}},
 		},
 	}

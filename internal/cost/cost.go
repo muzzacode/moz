@@ -20,6 +20,8 @@ var knownPrices = map[string]Price{
 	"openai-gpt-4o":      {Input: 2.50, Output: 10.0},
 	"openai-gpt-4o-mini": {Input: 0.15, Output: 0.60},
 	"openrouter-default": {Input: 0.10, Output: 0.30},
+	"openrouter-fast":    {Input: 0.03, Output: 0.13},
+	"openrouter-free":    {Input: 0, Output: 0},
 	"coding-default":     {Input: 0, Output: 0},
 	"coding-quality":     {Input: 0, Output: 0},
 	"general-default":    {Input: 0, Output: 0},
