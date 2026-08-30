@@ -871,7 +871,7 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			return m, m.agentWait()
 		}
 		m.currentStep = fmt.Sprintf("tool: %s", ev.ToolCall.Name)
-		desc := fmt.Sprintf("%s(%s)", ev.ToolCall.Name, string(ev.ToolCall.Arguments))
+		desc := m.describeToolCall(ev.ToolCall)
 		policy := m.cfg.Approval.For(ev.ToolCall.Name)
 
 		switch policy {
@@ -895,7 +895,7 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			return m, m.agentWait()
 		default:
 			m.confirming = true
-			m.confirmText = fmt.Sprintf("Allow %s? [y/n]", desc)
+			m.confirmText = formatConfirm(desc)
 			m.onConfirmYes = func() tea.Cmd {
 				if m.agentApproval != nil {
 					m.agentApproval <- true
