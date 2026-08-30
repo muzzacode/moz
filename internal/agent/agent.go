@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/muzzacode/moz/internal/adaptive"
+	"github.com/muzzacode/moz/internal/compact"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/credentials"
 	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/tokens"
 	"github.com/muzzacode/moz/internal/tools"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -72,14 +74,44 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 	messages = prependMessage(messages, memory.Message{Role: "system", Content: systemPrompt})
 
 	client := llm.New(profile, r.Creds)
+	if r.Config != nil {
+		client = client.WithTimeout(r.Config.RequestTimeout())
+	}
+	toolDefs := tools.Definitions()
+	compactCfg := compact.DefaultConfig(profile.ContextLength)
+	// Tool schemas are re-sent on every request and are invisible in the
+	// message list, so they must be charged against the budget explicitly.
+	compactCfg.FixedOverhead = tokens.EstimateJSON(toolDefs)
+	compactor := compact.New(compactCfg, client)
 
-	maxTurns := 15
+	maxTurns := r.maxTurns()
 	for turn := 0; turn < maxTurns; turn++ {
-		turnStart := time.Now()
-		out <- Event{Type: "step", Step: fmt.Sprintf("turn %d: reasoning", turn+1), Model: profile.Name, Elapsed: time.Since(start)}
+		if err := ctx.Err(); err != nil {
+			out <- Event{Type: "cancelled", Step: "cancelled", Elapsed: time.Since(start)}
+			return
+		}
 
-		resp, err := client.Chat(ctx, messages, tools.Definitions())
+		turnStart := time.Now()
+
+		var compRes compact.Result
+		messages, compRes = r.compact(ctx, compactor, messages, out, start)
+		if compRes.Compacted {
+			out <- Event{
+				Type:    "compacted",
+				Step:    fmt.Sprintf("compacted context: %d→%d tokens", compRes.TokensBefore, compRes.TokensAfter),
+				Model:   profile.Name,
+				Elapsed: time.Since(start),
+			}
+		}
+
+		out <- Event{Type: "step", Step: fmt.Sprintf("turn %d/%d: reasoning", turn+1, maxTurns), Model: profile.Name, Elapsed: time.Since(start)}
+
+		resp, err := client.Chat(ctx, messages, toolDefs)
 		if err != nil {
+			if ctx.Err() != nil {
+				out <- Event{Type: "cancelled", Step: "cancelled", Elapsed: time.Since(start)}
+				return
+			}
 			out <- Event{Type: "error", Error: err.Error(), Elapsed: time.Since(start)}
 			return
 		}
@@ -208,4 +240,34 @@ Use the exact tool names listed above. When you have enough information to answe
 
 func prependMessage(msgs []memory.Message, m memory.Message) []memory.Message {
 	return append([]memory.Message{m}, msgs...)
+}
+
+// maxTurns resolves the per-task tool-call budget. Complex refactors need many
+// more turns than a one-line edit, so this is configurable rather than fixed.
+func (r *Runner) maxTurns() int {
+	if r.Config != nil && r.Config.AgentOpts.MaxTurns > 0 {
+		return r.Config.AgentOpts.MaxTurns
+	}
+	return config.DefaultMaxTurns
+}
+
+// compact shrinks history to fit the model's context window. Compaction failure
+// is never fatal: the agent proceeds with the uncompacted history and lets the
+// provider decide, which is strictly better than aborting the user's task.
+func (r *Runner) compact(
+	ctx context.Context,
+	c *compact.Compactor,
+	messages []memory.Message,
+	out chan<- Event,
+	start time.Time,
+) ([]memory.Message, compact.Result) {
+	compacted, res, err := c.Compact(ctx, messages)
+	if err != nil {
+		out <- Event{Type: "warning", Step: fmt.Sprintf("context compaction failed: %v", err), Elapsed: time.Since(start)}
+		return messages, compact.Result{}
+	}
+	if res.SummaryFailed {
+		out <- Event{Type: "warning", Step: "context summary unavailable; trimmed oldest turns", Elapsed: time.Since(start)}
+	}
+	return compacted, res
 }

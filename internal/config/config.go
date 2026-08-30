@@ -3,10 +3,18 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/muzzacode/moz/internal/approval"
 	"gopkg.in/yaml.v3"
 )
+
+// DefaultMaxTurns is the default per-task tool-call budget for the agent loop.
+const DefaultMaxTurns = 40
+
+// DefaultRequestTimeout bounds a single model request so a hung provider cannot
+// wedge the whole session.
+const DefaultRequestTimeout = 300
 
 type Config struct {
 	OllamaBaseURL string           `yaml:"ollama_base_url"`
@@ -17,12 +25,25 @@ type Config struct {
 	Workspace     string           `yaml:"workspace"`
 	Approval      *approval.Policy `yaml:"approval"`
 	Agent         bool             `yaml:"agent"`
+	AgentOpts     AgentOpts        `yaml:"agent_options"`
+}
+
+type AgentOpts struct {
+	// MaxTurns caps tool-call iterations for a single task.
+	MaxTurns int `yaml:"max_turns"`
+	// RequestTimeoutSeconds bounds each individual model request.
+	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
+	// Verify runs the project's verification command after file edits and
+	// feeds failures back to the model.
+	Verify bool `yaml:"verify"`
+	// VerifyCommand overrides the auto-detected verification command.
+	VerifyCommand string `yaml:"verify_command"`
 }
 
 type AdaptiveOpts struct {
-	PreferLocal      bool    `yaml:"prefer_local"`
-	MaxCostPerTurn   float64 `yaml:"max_cost_per_turn"`
-	CloudThreshold   float64 `yaml:"cloud_threshold"`
+	PreferLocal    bool    `yaml:"prefer_local"`
+	MaxCostPerTurn float64 `yaml:"max_cost_per_turn"`
+	CloudThreshold float64 `yaml:"cloud_threshold"`
 }
 
 func Default() *Config {
@@ -44,7 +65,21 @@ func Default() *Config {
 		Workspace: cwd,
 		Approval:  approval.Default(),
 		Agent:     false,
+		AgentOpts: AgentOpts{
+			MaxTurns:              DefaultMaxTurns,
+			RequestTimeoutSeconds: DefaultRequestTimeout,
+			Verify:                true,
+		},
 	}
+}
+
+// RequestTimeout returns the per-request timeout as a duration.
+func (c *Config) RequestTimeout() time.Duration {
+	s := c.AgentOpts.RequestTimeoutSeconds
+	if s <= 0 {
+		s = DefaultRequestTimeout
+	}
+	return time.Duration(s) * time.Second
 }
 
 func Load(path string) (*Config, error) {

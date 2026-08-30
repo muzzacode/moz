@@ -7,9 +7,9 @@ import (
 )
 
 type TaskSignal struct {
-	Class   models.TaskClass
-	Reason  string
-	Boost   float64
+	Class  models.TaskClass
+	Reason string
+	Boost  float64
 }
 
 var rules = []struct {

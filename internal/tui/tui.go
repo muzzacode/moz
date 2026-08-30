@@ -130,21 +130,21 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	}
 
 	return &Model{
-		cfg:        cfg,
-		registry:   registry,
-		store:      store,
-		session:    sess,
-		creds:      creds,
-		router:     router,
-		toolkit:    toolkit,
-		todos:      todos,
-		todoStore:  todoStore,
-		profile:    profile,
-		mode:       mode,
+		cfg:          cfg,
+		registry:     registry,
+		store:        store,
+		session:      sess,
+		creds:        creds,
+		router:       router,
+		toolkit:      toolkit,
+		todos:        todos,
+		todoStore:    todoStore,
+		profile:      profile,
+		mode:         mode,
 		agentEnabled: cfg.Agent,
-		textarea:   ta,
-		viewport:   vp,
-		streamChan: make(chan llm.StreamEvent),
+		textarea:     ta,
+		viewport:     vp,
+		streamChan:   make(chan llm.StreamEvent),
 	}, nil
 }
 
