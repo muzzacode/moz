@@ -208,6 +208,21 @@ func DefaultProfiles() *Registry {
 					"max_tokens":  4096,
 				},
 			},
+			{
+				ID:               "openrouter-free",
+				Name:             "OpenRouter Free",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "openrouter/free",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
+				ContextLength:    200000,
+				CostTier:         "cloud-cheap",
+				DefaultParams: map[string]any{
+					"temperature": 0.5,
+					"max_tokens":  4096,
+				},
+			},
 		},
 		Stacks: []Stack{
 			{Name: "daily", Class: TaskQuickChat, Profiles: []string{"general-default", "coding-default"}},
