@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -31,7 +32,19 @@ func newAnthropicClient(p *models.Profile, cm *credentials.Manager) (*AnthropicC
 		return nil, fmt.Errorf("missing %s", p.APIKeyCredential)
 	}
 
-	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+
+	workspaceID := os.Getenv("ANTHROPIC_WORKSPACE_ID")
+	if workspaceID == "" && cm != nil {
+		if v, err := cm.Get("ANTHROPIC_WORKSPACE_ID"); err == nil {
+			workspaceID = v
+		}
+	}
+	if workspaceID != "" {
+		opts = append(opts, option.WithHeader("anthropic-workspace-id", workspaceID))
+	}
+
+	client := anthropic.NewClient(opts...)
 	return &AnthropicClient{client: client, profile: p}, nil
 }
 
@@ -66,8 +79,6 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []memory.Message, t
 }
 
 func (c *AnthropicClient) ChatStream(ctx context.Context, messages []memory.Message, out chan<- StreamEvent) {
-	defer close(out)
-
 	system, anthropicMessages := c.convertMessages(messages)
 
 	req := anthropic.MessageNewParams{

@@ -52,21 +52,21 @@ func (p *Profile) CanUseOpenAIClient() bool {
 }
 
 type Stack struct {
-	Name     string   `yaml:"name"`
+	Name     string    `yaml:"name"`
 	Class    TaskClass `yaml:"class"`
-	Profiles []string `yaml:"profiles"`
+	Profiles []string  `yaml:"profiles"`
 }
 
 type TaskClass string
 
 const (
-	TaskQuickChat  TaskClass = "quick_chat"
-	TaskCodeEdit   TaskClass = "code_edit"
-	TaskDebug      TaskClass = "debug"
-	TaskReasoning  TaskClass = "reasoning"
+	TaskQuickChat    TaskClass = "quick_chat"
+	TaskCodeEdit     TaskClass = "code_edit"
+	TaskDebug        TaskClass = "debug"
+	TaskReasoning    TaskClass = "reasoning"
 	TaskArchitecture TaskClass = "architecture"
-	TaskVision     TaskClass = "vision"
-	TaskChat       TaskClass = "chat"
+	TaskVision       TaskClass = "vision"
+	TaskChat         TaskClass = "chat"
 )
 
 type Registry struct {
@@ -80,101 +80,129 @@ func DefaultProfiles() *Registry {
 	return &Registry{
 		Profiles: []Profile{
 			{
-				ID:           "coding-default",
-				Name:         "PAIEP Coding Default",
-				ProviderKind: ProviderOllama,
-				Model:        "qwen2.5-coder:14b",
-				BaseURL:      "http://127.0.0.1:11434/v1/",
-				Capabilities: []Capability{CapToolCalling, CapCode},
+				ID:            "coding-default",
+				Name:          "PAIEP Coding Default",
+				ProviderKind:  ProviderOllama,
+				Model:         "qwen2.5-coder:14b",
+				BaseURL:       "http://127.0.0.1:11434/v1/",
+				Capabilities:  []Capability{CapToolCalling, CapCode},
 				ContextLength: 131072,
-				CostTier:     "local",
+				CostTier:      "local",
 				DefaultParams: map[string]any{
 					"temperature": 0.4,
 					"max_tokens":  4096,
 				},
 			},
 			{
-				ID:           "coding-quality",
-				Name:         "PAIEP Coding Quality",
-				ProviderKind: ProviderOllama,
-				Model:        "qwen2.5-coder:14b",
-				BaseURL:      "http://127.0.0.1:11434/v1/",
-				Capabilities: []Capability{CapToolCalling, CapCode, CapReasoning},
+				ID:            "coding-quality",
+				Name:          "PAIEP Coding Quality",
+				ProviderKind:  ProviderOllama,
+				Model:         "qwen2.5-coder:14b",
+				BaseURL:       "http://127.0.0.1:11434/v1/",
+				Capabilities:  []Capability{CapToolCalling, CapCode, CapReasoning},
 				ContextLength: 131072,
-				CostTier:     "local",
+				CostTier:      "local",
 				DefaultParams: map[string]any{
 					"temperature": 0.3,
 					"max_tokens":  4096,
 				},
 			},
 			{
-				ID:           "general-default",
-				Name:         "PAIEP General Default",
-				ProviderKind: ProviderOllama,
-				Model:        "qwen2.5-coder:14b",
-				BaseURL:      "http://127.0.0.1:11434/v1/",
-				Capabilities: []Capability{},
+				ID:            "general-default",
+				Name:          "PAIEP General Default",
+				ProviderKind:  ProviderOllama,
+				Model:         "qwen2.5-coder:14b",
+				BaseURL:       "http://127.0.0.1:11434/v1/",
+				Capabilities:  []Capability{},
 				ContextLength: 131072,
-				CostTier:     "local",
+				CostTier:      "local",
 				DefaultParams: map[string]any{
 					"temperature": 0.7,
 					"max_tokens":  4096,
 				},
 			},
 			{
-				ID:           "vision-default",
-				Name:         "PAIEP Vision Default",
-				ProviderKind: ProviderOllama,
-				Model:        "qwen2.5-coder:14b",
-				BaseURL:      "http://127.0.0.1:11434/v1/",
-				Capabilities: []Capability{CapVision, CapToolCalling},
+				ID:            "vision-default",
+				Name:          "PAIEP Vision Default",
+				ProviderKind:  ProviderOllama,
+				Model:         "qwen2.5-coder:14b",
+				BaseURL:       "http://127.0.0.1:11434/v1/",
+				Capabilities:  []Capability{CapVision, CapToolCalling},
 				ContextLength: 131072,
-				CostTier:     "local",
+				CostTier:      "local",
 				DefaultParams: map[string]any{
 					"temperature": 0.4,
 					"max_tokens":  4096,
 				},
 			},
 			{
-				ID:           "glm-5.3",
-				Name:         "GLM 5.3 (Z.ai)",
-				ProviderKind: ProviderOpenAICompatible,
-				Model:        "glm-5.3",
-				BaseURL:      "https://api.z.ai/api/paas/v4",
+				ID:               "glm-5.3",
+				Name:             "GLM 5.3 (Z.ai)",
+				ProviderKind:     ProviderOpenAICompatible,
+				Model:            "glm-5.3",
+				BaseURL:          "https://api.z.ai/api/paas/v4",
 				APIKeyCredential: "ZAI_API_KEY",
-				Capabilities: []Capability{CapToolCalling, CapReasoning, CapCode, CapLongContext},
-				ContextLength: 1048576,
-				CostTier:     "cloud-cheap",
+				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapLongContext},
+				ContextLength:    1048576,
+				CostTier:         "cloud-cheap",
 				DefaultParams: map[string]any{
-					"temperature": 0.6,
-					"max_tokens":  128000,
+					"temperature":      0.6,
+					"max_tokens":       128000,
 					"reasoning_effort": "max",
 				},
 			},
 			{
-				ID:           "claude-sonnet-5",
-				Name:         "Claude Sonnet 5",
-				ProviderKind: ProviderAnthropic,
-				Model:        "claude-sonnet-5",
+				ID:               "claude-sonnet-5",
+				Name:             "Claude Sonnet 5",
+				ProviderKind:     ProviderAnthropic,
+				Model:            "claude-sonnet-5",
 				APIKeyCredential: "ANTHROPIC_API_KEY",
-				Capabilities: []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
-				ContextLength: 200000,
-				CostTier:     "cloud-premium",
+				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
+				ContextLength:    200000,
+				CostTier:         "cloud-premium",
 				DefaultParams: map[string]any{
 					"temperature": 0.6,
 					"max_tokens":  8192,
 				},
 			},
 			{
-				ID:           "openrouter-default",
-				Name:         "OpenRouter Default",
-				ProviderKind: ProviderOpenRouter,
-				Model:        "openrouter/quasar-alpha",
-				BaseURL:      "https://openrouter.ai/api/v1",
+				ID:               "openai-gpt-4o",
+				Name:             "OpenAI GPT-4o",
+				ProviderKind:     ProviderOpenAICompatible,
+				Model:            "gpt-4o",
+				APIKeyCredential: "OPENAI_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
+				ContextLength:    128000,
+				CostTier:         "cloud-cheap",
+				DefaultParams: map[string]any{
+					"temperature": 0.6,
+					"max_tokens":  4096,
+				},
+			},
+			{
+				ID:               "openai-gpt-4o-mini",
+				Name:             "OpenAI GPT-4o Mini",
+				ProviderKind:     ProviderOpenAICompatible,
+				Model:            "gpt-4o-mini",
+				APIKeyCredential: "OPENAI_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
+				ContextLength:    128000,
+				CostTier:         "cloud-cheap",
+				DefaultParams: map[string]any{
+					"temperature": 0.6,
+					"max_tokens":  4096,
+				},
+			},
+			{
+				ID:               "openrouter-default",
+				Name:             "OpenRouter Default",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "openai/gpt-4o-mini",
+				BaseURL:          "https://openrouter.ai/api/v1",
 				APIKeyCredential: "OPENROUTER_API_KEY",
-				Capabilities: []Capability{CapToolCalling, CapCode, CapReasoning},
-				ContextLength: 200000,
-				CostTier:     "cloud-cheap",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
+				ContextLength:    200000,
+				CostTier:         "cloud-cheap",
 				DefaultParams: map[string]any{
 					"temperature": 0.5,
 					"max_tokens":  4096,
