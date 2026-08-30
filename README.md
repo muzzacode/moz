@@ -90,7 +90,15 @@ In the TUI:
 - `/new` or `/clear` — save the current conversation and start a new session.
 - `/exit` — quit.
 
-When the agent is on, Moz decides when to call tools. Each tool call is shown in the chat, and destructive tools ask for approval. The agent can also `web_search` the web via DuckDuckGo when it needs external information.
+Press `Esc` while a task is running to interrupt it. The conversation is kept, so you can correct course and continue instead of losing the session.
+
+### Agent behaviour
+
+When the agent is on, Moz decides when to call tools. It can also `web_search` via DuckDuckGo when it needs external information.
+
+- **Diff previews.** `edit_file` and `write_file` show a line-numbered preview of the real change before you approve it, and call out ambiguous or failing edits up front.
+- **Self-verification.** After the agent edits files, Moz runs the project's own verification command and hands any failure back to the model to fix. Detection prefers `make ci`/`check`/`verify`, then `make build`+`test`, then Go, Cargo, npm, or pytest.
+- **Context compaction.** Long sessions are summarized automatically so history stays inside the model's context window instead of overflowing it.
 
 ### Modes
 
@@ -112,6 +120,11 @@ approval:
   edit: ask
   exec: ask
   git: always
+agent_options:
+  max_turns: 40              # tool-call budget per task
+  request_timeout_seconds: 300
+  verify: true               # run the project's checks after edits
+  verify_command: ""         # override auto-detection
 ```
 
 Set cloud API keys via environment or the TUI:
@@ -130,7 +143,7 @@ Or inside Moz:
 
 ## Project status
 
-Phase 6 in progress: Claude, keychain credentials, `make install`, web_fetch, and live cost estimates.
+Working: adaptive routing, agent loop with planning and todos, context compaction, interruptible tasks, self-verification, diff previews, session persistence, headless `--task` mode, shell completion, and live cost estimates.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e
