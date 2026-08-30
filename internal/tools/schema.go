@@ -87,7 +87,7 @@ func Definitions() []Definition {
 			Name:        "list_todos",
 			Description: "List all session todos.",
 			Parameters: map[string]interface{}{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]interface{}{},
 			},
 		},
@@ -134,7 +134,7 @@ func Definitions() []Definition {
 		},
 		{
 			Name:        "write_file",
-			Description: "Write or overwrite a file. Use this to create new files.",
+			Description: "Create a new file. Fails if the file already exists; use edit_file for existing files.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -152,7 +152,7 @@ func Definitions() []Definition {
 		},
 		{
 			Name:        "edit_file",
-			Description: "Replace an exact string in a file with a new string. Use this for small, targeted changes.",
+			Description: "Replace an exact unique string in a file. Include enough surrounding context so old_string matches once. Set replace_all only when every occurrence should change.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -162,11 +162,15 @@ func Definitions() []Definition {
 					},
 					"old_string": map[string]string{
 						"type":        "string",
-						"description": "Exact existing text to replace",
+						"description": "Exact existing text to replace. Must be unique unless replace_all is true.",
 					},
 					"new_string": map[string]string{
 						"type":        "string",
 						"description": "New text to insert",
+					},
+					"replace_all": map[string]any{
+						"type":        "boolean",
+						"description": "Replace every occurrence of old_string. Defaults to false.",
 					},
 				},
 				"required": []string{"path", "old_string", "new_string"},

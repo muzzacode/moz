@@ -147,26 +147,30 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 
 	case "edit_file":
 		var args struct {
-			Path      string `json:"path"`
-			OldString string `json:"old_string"`
-			NewString string `json:"new_string"`
+			Path       string `json:"path"`
+			OldString  string `json:"old_string"`
+			NewString  string `json:"new_string"`
+			Old        string `json:"old"`
+			New        string `json:"new"`
+			ReplaceAll bool   `json:"replace_all"`
 		}
-		// Also accept old/new as a fallback.
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			var fallback struct {
-				Path string `json:"path"`
-				Old  string `json:"old"`
-				New  string `json:"new"`
-			}
-			if err2 := json.Unmarshal(call.Arguments, &fallback); err2 != nil {
-				tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
-				return tr
-			}
-			args.Path = fallback.Path
-			args.OldString = fallback.Old
-			args.NewString = fallback.New
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
 		}
-		if err := tk.EditFile(args.Path, args.OldString, args.NewString); err != nil {
+		if args.OldString == "" {
+			args.OldString = args.Old
+		}
+		if args.NewString == "" {
+			args.NewString = args.New
+		}
+		var err error
+		if args.ReplaceAll {
+			err = tk.EditFileAll(args.Path, args.OldString, args.NewString)
+		} else {
+			err = tk.EditFile(args.Path, args.OldString, args.NewString)
+		}
+		if err != nil {
 			tr.Error = err.Error()
 			return tr
 		}

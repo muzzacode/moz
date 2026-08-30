@@ -63,13 +63,32 @@ func (tk *Toolkit) WriteFile(path, content string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(p); err == nil {
+		return fmt.Errorf("%s already exists; use edit_file for targeted changes", path)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(p, []byte(content), 0644)
+	return writeAtomic(p, []byte(content), 0644)
 }
 
 func (tk *Toolkit) EditFile(path, oldStr, newStr string) error {
+	return tk.editFile(path, oldStr, newStr, false)
+}
+
+func (tk *Toolkit) EditFileAll(path, oldStr, newStr string) error {
+	return tk.editFile(path, oldStr, newStr, true)
+}
+
+func (tk *Toolkit) editFile(path, oldStr, newStr string, replaceAll bool) error {
+	if oldStr == "" {
+		return fmt.Errorf("old_string must not be empty")
+	}
+	if oldStr == newStr {
+		return fmt.Errorf("old_string and new_string must differ")
+	}
 	p, err := tk.Safe.Resolve(path)
 	if err != nil {
 		return err
@@ -78,11 +97,44 @@ func (tk *Toolkit) EditFile(path, oldStr, newStr string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(string(data), oldStr) {
+	count := strings.Count(string(data), oldStr)
+	if count == 0 {
 		return fmt.Errorf("old string not found in %s", path)
 	}
-	updated := strings.Replace(string(data), oldStr, newStr, 1)
-	return os.WriteFile(p, []byte(updated), 0644)
+	if count > 1 && !replaceAll {
+		return fmt.Errorf("old string occurs %d times in %s; include more context or set replace_all", count, path)
+	}
+	limit := 1
+	if replaceAll {
+		limit = -1
+	}
+	updated := strings.Replace(string(data), oldStr, newStr, limit)
+	info, err := os.Stat(p)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(p, []byte(updated), info.Mode().Perm())
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".moz-edit-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (tk *Toolkit) ListDir(path string) ([]FileInfo, error) {
