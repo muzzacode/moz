@@ -4,15 +4,18 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/muzzacode/moz/internal/approval"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	OllamaBaseURL string       `yaml:"ollama_base_url"`
-	MemoryDir     string       `yaml:"memory_dir"`
-	DefaultModel  string       `yaml:"default_model"`
-	Mode          string       `yaml:"mode"`
-	Adaptive      AdaptiveOpts `yaml:"adaptive"`
+	OllamaBaseURL string          `yaml:"ollama_base_url"`
+	MemoryDir     string          `yaml:"memory_dir"`
+	DefaultModel  string          `yaml:"default_model"`
+	Mode          string          `yaml:"mode"`
+	Adaptive      AdaptiveOpts    `yaml:"adaptive"`
+	Workspace     string          `yaml:"workspace"`
+	Approval      *approval.Policy `yaml:"approval"`
 }
 
 type AdaptiveOpts struct {
@@ -26,6 +29,7 @@ func Default() *Config {
 	if err != nil {
 		home = "."
 	}
+	cwd, _ := os.Getwd()
 	return &Config{
 		OllamaBaseURL: "http://127.0.0.1:11434/v1/",
 		MemoryDir:     filepath.Join(home, ".config", "moz", "memory"),
@@ -36,6 +40,8 @@ func Default() *Config {
 			MaxCostPerTurn: 0.0,
 			CloudThreshold: 0.75,
 		},
+		Workspace: cwd,
+		Approval:  approval.Default(),
 	}
 }
 

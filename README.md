@@ -55,6 +55,13 @@ In the TUI:
 - `/mode adaptive` — let Moz pick the model per task.
 - `/mode manual` — lock the current model.
 - `/mode <profile-id>` or `/model <id>` — switch model manually.
+- `/read <path>` — show file contents.
+- `/list [path]` — list directory contents.
+- `/grep <pattern> [path]` — search for a pattern.
+- `/run <command>` — run a shell command (asks for approval by default).
+- `/write <path> <content>` — write a file (asks for approval).
+- `/edit <path> <old> -> <new>` — replace text in a file (asks for approval).
+- `/git status | diff | commit <msg>` — run git commands.
 - `/memory` — show current session memory summary.
 - `/clear` — start a new session.
 - `/exit` — quit.
@@ -76,7 +83,7 @@ memory_dir: ~/.config/moz/memory
 
 ## Project status
 
-Phase 1 in progress: TUI chat skeleton with Ollama, model switching, and session memory.
+Phase 3 in progress: built-in tool runtime with safepath, approval model, and manual tool commands. Phase 4 will add the agent loop so the model can call tools itself.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e

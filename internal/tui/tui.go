@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,11 +14,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muzzacode/moz/internal/adaptive"
+	"github.com/muzzacode/moz/internal/approval"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/credentials"
 	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/safepath"
+	"github.com/muzzacode/moz/internal/tools"
 	"github.com/muzzacode/moz/internal/version"
 )
 
@@ -32,6 +37,7 @@ type Model struct {
 	session  *memory.Session
 	creds    *credentials.Manager
 	router   *adaptive.Router
+	toolkit  *tools.Toolkit
 
 	profile      *models.Profile
 	mode         string
@@ -44,6 +50,11 @@ type Model struct {
 	streamChan chan llm.StreamEvent
 	pending    string
 	errMsg     string
+
+	confirming   bool
+	confirmText  string
+	onConfirmYes func() tea.Cmd
+	onConfirmNo  func() tea.Cmd
 }
 
 var (
@@ -53,12 +64,23 @@ var (
 	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C"))
 	statusStyle    = lipgloss.NewStyle().Background(lipgloss.Color("#2C3E50")).Foreground(lipgloss.Color("#ECF0F1"))
 	infoStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#3498DB"))
+	warnStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1C40F"))
 )
 
 func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*Model, error) {
 	creds := credentials.New()
 	router := adaptive.New(registry, creds)
 	router.PreferLocal = cfg.Adaptive.PreferLocal
+
+	home, _ := os.UserHomeDir()
+	cwd, _ := os.Getwd()
+	allowed := []string{cwd, home}
+	if cfg.Workspace != "" {
+		allowed = append(allowed, cfg.Workspace)
+	}
+
+	safe := safepath.New(allowed)
+	toolkit := tools.New(safe)
 
 	profile, err := registry.Find(cfg.DefaultModel)
 	if err != nil {
@@ -91,6 +113,7 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*M
 		session:    sess,
 		creds:      creds,
 		router:     router,
+		toolkit:    toolkit,
 		profile:    profile,
 		mode:       mode,
 		textarea:   ta,
@@ -119,6 +142,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 
 	case tea.KeyMsg:
+		if m.confirming {
+			switch msg.Type {
+			case tea.KeyCtrlC, tea.KeyEsc:
+				m.confirming = false
+				return m, m.onConfirmNo()
+			}
+			switch msg.String() {
+			case "y", "Y":
+				m.confirming = false
+				return m, m.onConfirmYes()
+			case "n", "N":
+				m.confirming = false
+				return m, m.onConfirmNo()
+			}
+			return m, nil
+		}
+
 		switch {
 		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
 			m.saveSession()
@@ -152,13 +192,13 @@ func (m *Model) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if strings.HasPrefix(input, "/") {
-		return m.handleSlash(input)
-	}
-
 	if m.streaming {
 		m.errMsg = "wait for the current response to finish"
 		return m, nil
+	}
+
+	if strings.HasPrefix(input, "/") {
+		return m.handleSlash(input)
 	}
 
 	m.session.Messages = append(m.session.Messages, memory.Message{
@@ -167,7 +207,6 @@ func (m *Model) submitInput() (tea.Model, tea.Cmd) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	// Select model.
 	if m.mode == "adaptive" {
 		decision, err := m.router.Select(input)
 		if err != nil {
@@ -191,17 +230,20 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch parts[0] {
+	cmd := parts[0]
+	args := parts[1:]
+
+	switch cmd {
 	case "/exit", "/quit":
 		m.saveSession()
 		return m, tea.Quit
 
 	case "/model":
-		if len(parts) < 2 {
+		if len(args) < 1 {
 			m.errMsg = "usage: /model <profile-id>"
 			return m, nil
 		}
-		p, err := m.registry.Find(parts[1])
+		p, err := m.registry.Find(args[0])
 		if err != nil {
 			m.errMsg = err.Error()
 			return m, nil
@@ -213,11 +255,11 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/mode":
-		if len(parts) < 2 {
+		if len(args) < 1 {
 			m.errMsg = "usage: /mode adaptive | manual | <profile-id>"
 			return m, nil
 		}
-		arg := parts[1]
+		arg := args[0]
 		switch arg {
 		case "adaptive":
 			m.mode = "adaptive"
@@ -249,14 +291,234 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		m.addSystem("New session started")
 		return m, nil
 
+	case "/read", "/cat":
+		if len(args) < 1 {
+			m.errMsg = "usage: /read <path>"
+			return m, nil
+		}
+		return m.runWithApproval("read_file", args[0], nil, func() tea.Cmd {
+			content, err := m.toolkit.ReadFile(args[0])
+			if err != nil {
+				m.errMsg = err.Error()
+				m.updateViewport()
+				return nil
+			}
+			m.addSystem(fmt.Sprintf("--- %s ---\n%s", args[0], truncate(content, 6000)))
+			return nil
+		})
+
+	case "/list", "/ls":
+		path := "."
+		if len(args) >= 1 {
+			path = args[0]
+		}
+		return m.runWithApproval("list_dir", path, nil, func() tea.Cmd {
+			entries, err := m.toolkit.ListDir(path)
+			if err != nil {
+				m.errMsg = err.Error()
+				m.updateViewport()
+				return nil
+			}
+			var b strings.Builder
+			for _, e := range entries {
+				kind := "f"
+				if e.Dir {
+					kind = "d"
+				}
+				b.WriteString(fmt.Sprintf("[%s] %-30s %8d\n", kind, e.Name, e.Size))
+			}
+			m.addSystem(b.String())
+			return nil
+		})
+
+	case "/grep":
+		if len(args) < 1 {
+			m.errMsg = "usage: /grep <pattern> [path]"
+			return m, nil
+		}
+		pattern := args[0]
+		path := "."
+		if len(args) >= 2 {
+			path = args[1]
+		}
+		return m.runWithApproval("grep", pattern, map[string]any{"pattern": pattern, "path": path}, func() tea.Cmd {
+			matches, err := m.toolkit.Grep(pattern, path)
+			if err != nil {
+				m.errMsg = err.Error()
+				m.updateViewport()
+				return nil
+			}
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("%d matches\n", len(matches)))
+			for _, match := range matches {
+				rel, _ := filepath.Rel(path, match.File)
+				if rel == "" {
+					rel = match.File
+				}
+				b.WriteString(fmt.Sprintf("%s:%d: %s\n", rel, match.Line, match.Content))
+			}
+			m.addSystem(b.String())
+			return nil
+		})
+
+	case "/run", "/exec":
+		if len(args) < 1 {
+			m.errMsg = "usage: /run <command>"
+			return m, nil
+		}
+		command := strings.Join(args, " ")
+		desc := fmt.Sprintf("run %q", command)
+		return m.runWithApproval("exec", desc, map[string]any{"command": command}, func() tea.Cmd {
+			res := m.toolkit.Exec(command, "")
+			m.showResult(res)
+			return nil
+		})
+
+	case "/write":
+		if len(args) < 1 {
+			m.errMsg = "usage: /write <path> <content>"
+			return m, nil
+		}
+		path := args[0]
+		content := ""
+		if len(args) >= 2 {
+			content = strings.Join(args[1:], " ")
+		}
+		desc := fmt.Sprintf("write %s", path)
+		return m.runWithApproval("write_file", desc, map[string]any{"path": path}, func() tea.Cmd {
+			if err := m.toolkit.WriteFile(path, content); err != nil {
+				m.errMsg = err.Error()
+				m.updateViewport()
+				return nil
+			}
+			m.addSystem(fmt.Sprintf("Wrote %s", path))
+			return nil
+		})
+
+	case "/edit":
+		if len(args) < 2 {
+			m.errMsg = "usage: /edit <path> <old> -> <new>"
+			return m, nil
+		}
+		path := args[0]
+		rest := strings.Join(args[1:], " ")
+		split := strings.SplitN(rest, "->", 2)
+		if len(split) != 2 {
+			m.errMsg = "usage: /edit <path> <old> -> <new>"
+			return m, nil
+		}
+		oldStr := strings.TrimSpace(split[0])
+		newStr := strings.TrimSpace(split[1])
+		desc := fmt.Sprintf("edit %s", path)
+		return m.runWithApproval("edit_file", desc, map[string]any{"path": path}, func() tea.Cmd {
+			if err := m.toolkit.EditFile(path, oldStr, newStr); err != nil {
+				m.errMsg = err.Error()
+				m.updateViewport()
+				return nil
+			}
+			m.addSystem(fmt.Sprintf("Edited %s", path))
+			return nil
+		})
+
+	case "/git", "/g":
+		if len(args) < 1 {
+			m.errMsg = "usage: /git status | diff | commit <msg>"
+			return m, nil
+		}
+		return m.handleGit(args)
+
 	case "/help":
-		m.addSystem("Commands: /model, /mode, /memory, /clear, /exit")
+		m.addSystem("Commands: /model, /mode, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /exit")
 		return m, nil
 
 	default:
-		m.errMsg = fmt.Sprintf("unknown command: %s", parts[0])
+		m.errMsg = fmt.Sprintf("unknown command: %s", cmd)
 		return m, nil
 	}
+}
+
+func (m *Model) handleGit(args []string) (tea.Model, tea.Cmd) {
+	sub := args[0]
+	switch sub {
+	case "status":
+		cwd := ""
+		if len(args) >= 2 {
+			cwd = args[1]
+		}
+		return m.runWithApproval("git_status", "git status", nil, func() tea.Cmd {
+			res := m.toolkit.GitStatus(cwd)
+			m.showResult(res)
+			return nil
+		})
+	case "diff":
+		cwd := ""
+		if len(args) >= 2 {
+			cwd = args[1]
+		}
+		return m.runWithApproval("git_diff", "git diff", nil, func() tea.Cmd {
+			res := m.toolkit.GitDiff(cwd)
+			m.showResult(res)
+			return nil
+		})
+	case "commit":
+		if len(args) < 2 {
+			m.errMsg = "usage: /git commit <message>"
+			return m, nil
+		}
+		msg := strings.Join(args[1:], " ")
+		desc := fmt.Sprintf("git commit -m %q", msg)
+		return m.runWithApproval("git_commit", desc, nil, func() tea.Cmd {
+			res := m.toolkit.GitCommit("", msg)
+			m.showResult(res)
+			return nil
+		})
+	default:
+		m.errMsg = fmt.Sprintf("unknown git subcommand: %s", sub)
+		return m, nil
+	}
+}
+
+func (m *Model) runWithApproval(tool, description string, params map[string]any, fn func() tea.Cmd) (tea.Model, tea.Cmd) {
+	policy := m.cfg.Approval.For(tool)
+	switch policy {
+	case approval.LevelNever:
+		m.errMsg = fmt.Sprintf("tool %s is set to never", tool)
+		m.updateViewport()
+		return m, nil
+	case approval.LevelShadow:
+		m.addSystem(fmt.Sprintf("[shadow] %s", description))
+		return m, nil
+	case approval.LevelAsk:
+		m.confirming = true
+		m.confirmText = fmt.Sprintf("Allow %s? [y/n]", description)
+		m.onConfirmYes = fn
+		m.onConfirmNo = func() tea.Cmd {
+			m.addSystem("cancelled")
+			return nil
+		}
+		m.updateViewport()
+		return m, nil
+	default:
+		return m, fn()
+	}
+}
+
+func (m *Model) showResult(res tools.Result) {
+	var b strings.Builder
+	if res.ExitCode != 0 {
+		b.WriteString(fmt.Sprintf("exit code: %d\n", res.ExitCode))
+	}
+	if res.Error != "" {
+		b.WriteString(fmt.Sprintf("error: %s\n", res.Error))
+	}
+	if res.Stdout != "" {
+		b.WriteString(truncate(res.Stdout, 6000))
+	}
+	if res.Stderr != "" {
+		b.WriteString("\n--- stderr ---\n")
+		b.WriteString(truncate(res.Stderr, 2000))
+	}
+	m.addSystem(b.String())
 }
 
 func (m *Model) addSystem(text string) {
@@ -266,6 +528,13 @@ func (m *Model) addSystem(text string) {
 		Timestamp: time.Now().UTC(),
 	})
 	m.updateViewport()
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n... (truncated)"
 }
 
 func (m *Model) startStream() tea.Cmd {
@@ -330,6 +599,11 @@ func (m *Model) updateViewport() {
 	if m.streaming && m.pending != "" {
 		b.WriteString(formatMessage(memory.Message{Role: "assistant", Content: m.pending, Model: m.profile.Name, Timestamp: time.Now().UTC()}))
 		b.WriteString("▌")
+	}
+	if m.confirming {
+		b.WriteString("\n")
+		b.WriteString(warnStyle.Render(m.confirmText))
+		b.WriteString("\n")
 	}
 	if m.errMsg != "" {
 		b.WriteString("\n")
