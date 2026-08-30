@@ -1,12 +1,15 @@
 package tools
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	readability "codeberg.org/readeck/go-readability/v2"
 	"golang.org/x/net/html"
 )
 
@@ -163,12 +166,30 @@ func hasClass(n *html.Node, class string) bool {
 	return false
 }
 
-// WebFetch fetches a URL and returns the readable text.
+// WebFetch fetches a URL and returns the readable article text.
 func (tk *Toolkit) WebFetch(u string) (string, error) {
 	if u == "" {
 		return "", fmt.Errorf("empty URL")
 	}
 
+	article, err := readability.FromURL(u, 10*time.Second, func(r *http.Request) {
+		r.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	})
+	if err != nil {
+		// Fallback to a simple text extraction.
+		return simpleFetch(u)
+	}
+
+	var buf bytes.Buffer
+	if err := article.RenderText(&buf); err != nil {
+		return "", err
+	}
+
+	text := strings.Join(strings.Fields(buf.String()), " ")
+	return truncateText(text, 20000), nil
+}
+
+func simpleFetch(u string) (string, error) {
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return "", err
