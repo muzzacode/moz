@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/muzzacode/moz/internal/config"
@@ -29,6 +31,13 @@ type Session struct {
 	ID       string    `json:"id"`
 	Started  time.Time `json:"started"`
 	Messages []Message `json:"messages"`
+}
+
+type SessionInfo struct {
+	ID       string
+	Started  time.Time
+	Messages int
+	Preview  string
 }
 
 type Store struct {
@@ -96,6 +105,44 @@ func (s *Store) ListSessions() ([]string, error) {
 		}
 	}
 	return ids, nil
+}
+
+func (s *Store) SessionInfos() ([]SessionInfo, error) {
+	ids, err := s.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]SessionInfo, 0, len(ids))
+	for _, id := range ids {
+		sess, err := s.LoadSession(id)
+		if err != nil {
+			continue
+		}
+		preview := ""
+		for _, msg := range sess.Messages {
+			if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
+				preview = strings.Join(strings.Fields(msg.Content), " ")
+				if len(preview) > 60 {
+					preview = preview[:57] + "..."
+				}
+				break
+			}
+		}
+		infos = append(infos, SessionInfo{ID: id, Started: sess.Started, Messages: len(sess.Messages), Preview: preview})
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Started.After(infos[j].Started) })
+	return infos, nil
+}
+
+func (s *Store) LatestSession() (*Session, error) {
+	infos, err := s.SessionInfos()
+	if err != nil {
+		return nil, err
+	}
+	if len(infos) == 0 {
+		return nil, fmt.Errorf("no saved sessions")
+	}
+	return s.LoadSession(infos[0].ID)
 }
 
 func (s *Store) Summary() string {

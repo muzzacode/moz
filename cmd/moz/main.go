@@ -21,6 +21,7 @@ var (
 	task        string
 	autoApprove bool
 	files       []string
+	resumeID    string
 )
 
 func main() {
@@ -36,6 +37,7 @@ func main() {
 	rootCmd.Flags().StringVar(&task, "task", "", "run a single task in headless mode and exit")
 	rootCmd.Flags().BoolVar(&autoApprove, "yes", false, "auto-approve all tool calls in headless mode")
 	rootCmd.Flags().StringSliceVar(&files, "files", nil, "file paths to include as context for --task")
+	rootCmd.Flags().StringVar(&resumeID, "resume", "", "resume a saved TUI session by ID or latest")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -86,11 +88,23 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	if task != "" {
+		if resumeID != "" {
+			return fmt.Errorf("--resume cannot be used with --task")
+		}
 		if cfg.Agent {
 			cfg.Agent = false
 		}
 		return runner.RunTask(context.Background(), cfg, registry, store, task, files, autoApprove)
 	}
 
-	return tui.Run(cfg, registry, store)
+	var initial *memory.Session
+	if resumeID == "latest" {
+		initial, err = store.LatestSession()
+	} else if resumeID != "" {
+		initial, err = store.LoadSession(resumeID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to resume session: %w", err)
+	}
+	return tui.Run(cfg, registry, store, initial)
 }

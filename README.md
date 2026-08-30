@@ -51,6 +51,8 @@ This installs the required foundation tooling without changing global system def
 moz                          # start interactive TUI
 moz --model qwen2.5-coder:14b
 moz --model claude-sonnet-5  # requires ANTHROPIC_API_KEY + ANTHROPIC_WORKSPACE_ID
+moz --resume latest          # continue the most recent saved TUI session
+moz --resume <session-id>
 moz --help
 
 # run one task in headless mode
@@ -79,7 +81,9 @@ In the TUI:
 - `/fetch <url>` — read a web page.
 - `/todo [add|done|remove|clear|list]` — manage session todos.
 - `/memory` — show current session memory summary.
-- `/clear` — start a new session.
+- `/sessions` — list saved sessions newest-first.
+- `/resume [latest|session-id]` — continue a saved conversation.
+- `/new` or `/clear` — save the current conversation and start a new session.
 - `/exit` — quit.
 
 When the agent is on, Moz decides when to call tools. Each tool call is shown in the chat, and destructive tools ask for approval. The agent can also `web_search` the web via DuckDuckGo when it needs external information.

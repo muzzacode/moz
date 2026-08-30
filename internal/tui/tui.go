@@ -82,7 +82,7 @@ var (
 	warnStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1C40F"))
 )
 
-func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*Model, error) {
+func New(cfg *config.Config, registry *models.Registry, store *memory.Store, initial ...*memory.Session) (*Model, error) {
 	creds := credentials.New()
 	router := adaptive.New(registry, creds)
 	router.PreferLocal = cfg.Adaptive.PreferLocal
@@ -125,6 +125,9 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*M
 	vp.SetContent("")
 
 	sess := memory.NewSession()
+	if len(initial) > 0 && initial[0] != nil {
+		sess = initial[0]
+	}
 
 	return &Model{
 		cfg:        cfg,
@@ -335,7 +338,68 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		m.addSystem(m.store.Summary())
 		return m, nil
 
-	case "/clear":
+	case "/sessions":
+		infos, err := m.store.SessionInfos()
+		if err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		if len(infos) == 0 {
+			m.addSystem("No saved sessions")
+			return m, nil
+		}
+		var b strings.Builder
+		b.WriteString("Saved sessions:\n")
+		for _, info := range infos {
+			fmt.Fprintf(&b, "%s | %s | %d messages", info.ID, info.Started.Local().Format("2006-01-02 15:04"), info.Messages)
+			if info.Preview != "" {
+				fmt.Fprintf(&b, " | %s", info.Preview)
+			}
+			b.WriteByte('\n')
+		}
+		m.addSystem(strings.TrimSpace(b.String()))
+		return m, nil
+
+	case "/resume":
+		id := "latest"
+		if len(args) > 0 {
+			id = args[0]
+		}
+		m.saveSession()
+		var sess *memory.Session
+		var err error
+		if id == "latest" {
+			infos, listErr := m.store.SessionInfos()
+			if listErr != nil {
+				err = listErr
+			} else {
+				for _, info := range infos {
+					if info.ID != m.session.ID {
+						sess, err = m.store.LoadSession(info.ID)
+						break
+					}
+				}
+				if sess == nil && err == nil {
+					err = fmt.Errorf("no previous saved session")
+				}
+			}
+		} else {
+			sess, err = m.store.LoadSession(id)
+		}
+		if err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.session = sess
+		m.pending = ""
+		m.streaming = false
+		m.errMsg = ""
+		m.updateViewport()
+		m.addSystem(fmt.Sprintf("Resumed session: %s", sess.ID))
+		return m, nil
+
+	case "/clear", "/new":
+		m.saveSession()
 		m.session = memory.NewSession()
 		m.pending = ""
 		m.streaming = false
@@ -517,7 +581,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/help":
-		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit")
+		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /sessions, /resume, /new, /clear, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit")
 		return m, nil
 
 	default:
@@ -973,8 +1037,8 @@ func (m Model) View() string {
 	)
 }
 
-func Run(cfg *config.Config, registry *models.Registry, store *memory.Store) error {
-	m, err := New(cfg, registry, store)
+func Run(cfg *config.Config, registry *models.Registry, store *memory.Store, initial ...*memory.Session) error {
+	m, err := New(cfg, registry, store, initial...)
 	if err != nil {
 		return err
 	}
