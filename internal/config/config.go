@@ -51,7 +51,6 @@ func Default() *Config {
 	if err != nil {
 		home = "."
 	}
-	cwd, _ := os.Getwd()
 	return &Config{
 		OllamaBaseURL: "http://127.0.0.1:11434/v1/",
 		MemoryDir:     filepath.Join(home, ".config", "moz", "memory"),
@@ -62,7 +61,10 @@ func Default() *Config {
 			MaxCostPerTurn: 0.0,
 			CloudThreshold: 0.75,
 		},
-		Workspace: cwd,
+		// Workspace is deliberately empty: persisting the first run's directory
+		// into global config would pin every later session to it. It is an
+		// optional extra allowed root, not the active project.
+		Workspace: "",
 		Approval:  approval.Default(),
 		Agent:     false,
 		AgentOpts: AgentOpts{

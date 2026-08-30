@@ -115,6 +115,10 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 			}
 		case "message":
 			fmt.Print(ev.Content)
+		case "warning", "compacted", "verified":
+			fmt.Fprintf(os.Stderr, "[%s] %s\n", ev.Type, ev.Step)
+		case "cancelled":
+			fmt.Fprintln(os.Stderr, "[cancelled]")
 		case "error":
 			fmt.Fprintf(os.Stderr, "[error] %s\n", ev.Error)
 		case "usage":

@@ -947,11 +947,7 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
-	case "warning":
-		m.addSystem(ev.Step)
-		return m, m.agentWait()
-
-	case "compacted":
+	case "warning", "compacted", "verified":
 		m.addSystem(ev.Step)
 		return m, m.agentWait()
 

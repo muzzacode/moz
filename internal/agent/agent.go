@@ -84,6 +84,8 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 	compactCfg.FixedOverhead = tokens.EstimateJSON(toolDefs)
 	compactor := compact.New(compactCfg, client)
 
+	verifyState := newVerifyState(r.Config)
+
 	maxTurns := r.maxTurns()
 	for turn := 0; turn < maxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
@@ -119,6 +121,18 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 		out <- Event{Type: "usage", Usage: resp.Usage, Elapsed: time.Since(start)}
 
 		if len(resp.ToolCalls) == 0 {
+			// The model believes it is finished. If it changed files, run the
+			// project's own verification and hand back any failure so it can
+			// fix the problem rather than reporting false success.
+			if feedback, ok := r.runVerification(ctx, &verifyState, out, start, profile); ok {
+				messages = append(messages, memory.Message{
+					Role:      "user",
+					Content:   feedback,
+					Timestamp: time.Now().UTC(),
+				})
+				continue
+			}
+
 			// Final answer. Stream it for nicer UI.
 			out <- Event{Type: "step", Step: "finalizing", Model: profile.Name, Elapsed: time.Since(start)}
 			streamOut := make(chan llm.StreamEvent)
@@ -183,6 +197,11 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 				Arguments: tc.Arguments,
 			})
 			out <- Event{Type: "tool_result", ToolResult: &result, Elapsed: time.Since(start)}
+
+			// Only a successful mutation makes verification worthwhile.
+			if result.Error == "" && mutatesFiles(tc.Name) {
+				verifyState.markDirty()
+			}
 
 			// Add tool result to conversation.
 			content := result.Content
