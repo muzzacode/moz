@@ -1,3 +1,8 @@
+<!--
+Moz is a personal, model-agnostic, agentic terminal.
+It runs locally-first with Ollama and can promote any task to frontier cloud models.
+-->
+
 # Moz
 
 Moz is a personal, model-agnostic, agentic terminal. It runs on top of the [PAIEP](https://github.com/muzzacode/paiep) local-AI engineering platform and can promote any task to frontier open-weight models or Claude.

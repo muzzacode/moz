@@ -227,11 +227,11 @@ func DefaultProfiles() *Registry {
 		Stacks: []Stack{
 			{Name: "daily", Class: TaskQuickChat, Profiles: []string{"general-default", "coding-default"}},
 			{Name: "chat", Class: TaskChat, Profiles: []string{"general-default"}},
-			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "vision", Class: TaskVision, Profiles: []string{"vision-default", "claude-sonnet-5"}},
+			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
+			{Name: "vision", Class: TaskVision, Profiles: []string{"vision-default", "openrouter-default", "claude-sonnet-5"}},
 		},
 	}
 }

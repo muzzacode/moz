@@ -47,9 +47,9 @@ func (rt *Router) Select(prompt string) (*Decision, error) {
 			continue
 		}
 
-		// If we already found a local model and prefer local, only promote to cloud if the task strongly demands it.
+		// If we already found a local model and prefer local, only promote to cloud if the task is non-trivial.
 		if selected != nil && rt.PreferLocal && selected.IsLocal() && !p.IsLocal() {
-			if signal.Boost < 0.75 {
+			if signal.Boost < 0.5 {
 				continue
 			}
 		}
