@@ -9,13 +9,14 @@ import (
 )
 
 type Config struct {
-	OllamaBaseURL string          `yaml:"ollama_base_url"`
-	MemoryDir     string          `yaml:"memory_dir"`
-	DefaultModel  string          `yaml:"default_model"`
-	Mode          string          `yaml:"mode"`
-	Adaptive      AdaptiveOpts    `yaml:"adaptive"`
-	Workspace     string          `yaml:"workspace"`
+	OllamaBaseURL string           `yaml:"ollama_base_url"`
+	MemoryDir     string           `yaml:"memory_dir"`
+	DefaultModel  string           `yaml:"default_model"`
+	Mode          string           `yaml:"mode"`
+	Adaptive      AdaptiveOpts     `yaml:"adaptive"`
+	Workspace     string           `yaml:"workspace"`
 	Approval      *approval.Policy `yaml:"approval"`
+	Agent         bool             `yaml:"agent"`
 }
 
 type AdaptiveOpts struct {
@@ -42,6 +43,7 @@ func Default() *Config {
 		},
 		Workspace: cwd,
 		Approval:  approval.Default(),
+		Agent:     false,
 	}
 }
 

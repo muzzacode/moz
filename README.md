@@ -55,6 +55,7 @@ In the TUI:
 - `/mode adaptive` — let Moz pick the model per task.
 - `/mode manual` — lock the current model.
 - `/mode <profile-id>` or `/model <id>` — switch model manually.
+- `/agent on | off` — enable or disable the agent loop.
 - `/read <path>` — show file contents.
 - `/list [path]` — list directory contents.
 - `/grep <pattern> [path]` — search for a pattern.
@@ -65,6 +66,8 @@ In the TUI:
 - `/memory` — show current session memory summary.
 - `/clear` — start a new session.
 - `/exit` — quit.
+
+When the agent is on, Moz decides when to call tools. Each tool call is shown in the chat, and destructive tools ask for approval.
 
 ### Modes
 
@@ -79,11 +82,12 @@ Moz reads `~/.config/moz/config.yaml` and model profiles from `~/.config/moz/mod
 # ~/.config/moz/config.yaml
 ollama_base_url: http://127.0.0.1:11434
 memory_dir: ~/.config/moz/memory
+agent: false
 ```
 
 ## Project status
 
-Phase 3 in progress: built-in tool runtime with safepath, approval model, and manual tool commands. Phase 4 will add the agent loop so the model can call tools itself.
+Phase 4 done: agent loop with model-driven tool calls, real-time status bar (step, elapsed time, token usage), and approval model. Toggle with `/agent on | off`.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e

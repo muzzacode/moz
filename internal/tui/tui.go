@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muzzacode/moz/internal/adaptive"
+	"github.com/muzzacode/moz/internal/agent"
 	"github.com/muzzacode/moz/internal/approval"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/credentials"
@@ -55,6 +56,15 @@ type Model struct {
 	confirmText  string
 	onConfirmYes func() tea.Cmd
 	onConfirmNo  func() tea.Cmd
+
+	// Agent loop.
+	agentEnabled  bool
+	agentOut      chan agent.Event
+	agentApproval chan bool
+	currentStep   string
+	startTime     time.Time
+	elapsed       time.Duration
+	totalTokens   int
 }
 
 var (
@@ -116,6 +126,7 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*M
 		toolkit:    toolkit,
 		profile:    profile,
 		mode:       mode,
+		agentEnabled: cfg.Agent,
 		textarea:   ta,
 		viewport:   vp,
 		streamChan: make(chan llm.StreamEvent),
@@ -173,6 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case llm.StreamEvent:
 		return m.handleStreamEvent(msg)
 
+	case agent.Event:
+		return m.handleAgentEvent(msg)
+
 	case errMsg:
 		m.errMsg = string(msg)
 	}
@@ -216,11 +230,16 @@ func (m *Model) submitInput() (tea.Model, tea.Cmd) {
 		}
 		m.lastDecision = decision
 		m.profile = decision.Profile
-		m.addSystem(fmt.Sprintf("Adaptive: %s", decision.Reason))
+		if !m.agentEnabled {
+			m.addSystem(fmt.Sprintf("Adaptive: %s", decision.Reason))
+		}
 	}
 
 	m.updateViewport()
 
+	if m.agentEnabled {
+		return m, m.startAgent(input)
+	}
 	return m, m.startStream()
 }
 
@@ -277,6 +296,27 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			m.mode = "manual"
 			m.addSystem(fmt.Sprintf("Mode: manual, model: %s", p.Name))
 		}
+		return m, nil
+
+	case "/agent":
+		if len(args) >= 1 {
+			switch args[0] {
+			case "on":
+				m.agentEnabled = true
+			case "off":
+				m.agentEnabled = false
+			default:
+				m.errMsg = "usage: /agent on | off"
+				return m, nil
+			}
+		} else {
+			m.agentEnabled = !m.agentEnabled
+		}
+		state := "off"
+		if m.agentEnabled {
+			state = "on"
+		}
+		m.addSystem(fmt.Sprintf("Agent mode: %s", state))
 		return m, nil
 
 	case "/memory":
@@ -428,7 +468,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m.handleGit(args)
 
 	case "/help":
-		m.addSystem("Commands: /model, /mode, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /exit")
+		m.addSystem("Commands: /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /exit")
 		return m, nil
 
 	default:
@@ -537,10 +577,155 @@ func truncate(s string, max int) string {
 	return s[:max] + "\n... (truncated)"
 }
 
+func (m *Model) startAgent(input string) tea.Cmd {
+	m.streaming = true
+	m.pending = ""
+	m.errMsg = ""
+	m.startTime = time.Now()
+	m.currentStep = "starting"
+	m.elapsed = 0
+	m.totalTokens = 0
+
+	m.agentOut = make(chan agent.Event)
+	m.agentApproval = make(chan bool)
+
+	cfg := m.cfg
+	reg := m.registry
+	runner := agent.New(cfg, reg, m.toolkit)
+	sess := m.session
+
+	go runner.Run(context.Background(), m.profile, input, sess, m.agentOut, m.agentApproval)
+
+	return m.agentWait()
+}
+
+func (m *Model) agentWait() tea.Cmd {
+	return func() tea.Msg {
+		if m.agentOut == nil {
+			return agent.Event{Type: "done"}
+		}
+		ev, ok := <-m.agentOut
+		if !ok {
+			m.agentOut = nil
+			return agent.Event{Type: "done"}
+		}
+		return ev
+	}
+}
+
+func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
+	m.currentStep = ev.Step
+	m.elapsed = ev.Elapsed
+	if ev.Usage > 0 {
+		m.totalTokens += ev.Usage
+	}
+
+	switch ev.Type {
+	case "step":
+		m.updateViewport()
+		return m, m.agentWait()
+
+	case "tool_call":
+		if ev.ToolCall == nil {
+			return m, m.agentWait()
+		}
+		m.currentStep = fmt.Sprintf("tool: %s", ev.ToolCall.Name)
+		desc := fmt.Sprintf("%s(%s)", ev.ToolCall.Name, string(ev.ToolCall.Arguments))
+		policy := m.cfg.Approval.For(ev.ToolCall.Name)
+
+		switch policy {
+		case approval.LevelAlways:
+			m.addSystem(fmt.Sprintf("Calling %s", desc))
+			if m.agentApproval != nil {
+				m.agentApproval <- true
+			}
+			return m, m.agentWait()
+		case approval.LevelNever:
+			m.addSystem(fmt.Sprintf("Denied %s", desc))
+			if m.agentApproval != nil {
+				m.agentApproval <- false
+			}
+			return m, m.agentWait()
+		case approval.LevelShadow:
+			m.addSystem(fmt.Sprintf("[shadow] %s", desc))
+			if m.agentApproval != nil {
+				m.agentApproval <- false
+			}
+			return m, m.agentWait()
+		default:
+			m.confirming = true
+			m.confirmText = fmt.Sprintf("Allow %s? [y/n]", desc)
+			m.onConfirmYes = func() tea.Cmd {
+				if m.agentApproval != nil {
+					m.agentApproval <- true
+				}
+				return m.agentWait()
+			}
+			m.onConfirmNo = func() tea.Cmd {
+				if m.agentApproval != nil {
+					m.agentApproval <- false
+				}
+				return m.agentWait()
+			}
+			m.updateViewport()
+			return m, nil
+		}
+
+	case "tool_result":
+		if ev.ToolResult == nil {
+			return m, m.agentWait()
+		}
+		content := ev.ToolResult.Content
+		if ev.ToolResult.Error != "" {
+			content = fmt.Sprintf("error: %s", ev.ToolResult.Error)
+		}
+		m.addSystem(fmt.Sprintf("Tool %s result:\n%s", ev.ToolResult.Name, truncate(content, 2000)))
+		return m, m.agentWait()
+
+	case "message":
+		m.pending += ev.Content
+		m.updateViewport()
+		return m, m.agentWait()
+
+	case "usage":
+		m.updateViewport()
+		return m, m.agentWait()
+
+	case "done":
+		m.streaming = false
+		m.currentStep = ""
+		if m.pending != "" {
+			m.session.Messages = append(m.session.Messages, memory.Message{
+				Role:      "assistant",
+				Content:   m.pending,
+				Model:     m.profile.Name,
+				Timestamp: time.Now().UTC(),
+			})
+			m.pending = ""
+		}
+		m.saveSession()
+		m.updateViewport()
+		return m, nil
+
+	case "error":
+		m.streaming = false
+		m.currentStep = ""
+		m.errMsg = ev.Error
+		m.updateViewport()
+		return m, nil
+	}
+
+	return m, m.agentWait()
+}
+
 func (m *Model) startStream() tea.Cmd {
 	m.streaming = true
 	m.pending = ""
 	m.errMsg = ""
+	m.startTime = time.Now()
+	m.currentStep = "streaming"
+	m.elapsed = 0
+	m.totalTokens = 0
 
 	ch := make(chan llm.StreamEvent)
 	m.streamChan = ch
@@ -565,12 +750,14 @@ func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	if ev.Err != nil {
 		m.streaming = false
 		m.errMsg = ev.Err.Error()
+		m.currentStep = ""
 		m.updateViewport()
 		return m, nil
 	}
 
 	if ev.Done {
 		m.streaming = false
+		m.currentStep = ""
 		if m.pending != "" {
 			m.session.Messages = append(m.session.Messages, memory.Message{
 				Role:      "assistant",
@@ -644,9 +831,16 @@ func (m Model) View() string {
 	}
 
 	var status strings.Builder
-	status.WriteString(fmt.Sprintf(" moz %s | mode: %s | model: %s | streaming: %v ", version.Version, m.mode, m.profile.Name, m.streaming))
-	if m.mode == "adaptive" && m.lastDecision != nil {
-		status.WriteString(fmt.Sprintf("| class: %s ", m.lastDecision.Class))
+	status.WriteString(fmt.Sprintf(" moz %s | mode: %s | agent: %v | model: %s ", version.Version, m.mode, m.agentEnabled, m.profile.Name))
+
+	if m.currentStep != "" {
+		status.WriteString(fmt.Sprintf("| step: %s ", m.currentStep))
+	}
+	if m.elapsed > 0 {
+		status.WriteString(fmt.Sprintf("| time: %s ", m.elapsed.Round(time.Millisecond)))
+	}
+	if m.totalTokens > 0 {
+		status.WriteString(fmt.Sprintf("| tokens: %d ", m.totalTokens))
 	}
 
 	bar := statusStyle.Width(m.viewport.Width).Render(status.String())

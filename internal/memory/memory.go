@@ -10,11 +10,19 @@ import (
 	"github.com/muzzacode/moz/internal/config"
 )
 
+type ToolCall struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 type Message struct {
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	Model     string    `json:"model,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Model      string     `json:"model,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Timestamp  time.Time  `json:"timestamp"`
 }
 
 type Session struct {
