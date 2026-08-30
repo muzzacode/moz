@@ -22,6 +22,7 @@ import (
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
 	"github.com/muzzacode/moz/internal/safepath"
+	"github.com/muzzacode/moz/internal/todo"
 	"github.com/muzzacode/moz/internal/tools"
 	"github.com/muzzacode/moz/internal/version"
 )
@@ -32,13 +33,15 @@ var (
 )
 
 type Model struct {
-	cfg      *config.Config
-	registry *models.Registry
-	store    *memory.Store
-	session  *memory.Session
-	creds    *credentials.Manager
-	router   *adaptive.Router
-	toolkit  *tools.Toolkit
+	cfg       *config.Config
+	registry  *models.Registry
+	store     *memory.Store
+	session   *memory.Session
+	creds     *credentials.Manager
+	router    *adaptive.Router
+	toolkit   *tools.Toolkit
+	todos     *todo.List
+	todoStore *todo.Store
 
 	profile      *models.Profile
 	mode         string
@@ -90,7 +93,12 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*M
 	}
 
 	safe := safepath.New(allowed)
-	toolkit := tools.New(safe)
+	todoStore := todo.NewStore(cfg)
+	todos, err := todoStore.Load()
+	if err != nil {
+		todos = todo.New()
+	}
+	toolkit := tools.New(safe, todos)
 
 	profile, err := registry.Find(cfg.DefaultModel)
 	if err != nil {
@@ -124,6 +132,8 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store) (*M
 		creds:      creds,
 		router:     router,
 		toolkit:    toolkit,
+		todos:      todos,
+		todoStore:  todoStore,
 		profile:    profile,
 		mode:       mode,
 		agentEnabled: cfg.Agent,
@@ -467,8 +477,11 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		}
 		return m.handleGit(args)
 
+	case "/todo":
+		return m.handleTodo(args)
+
 	case "/help":
-		m.addSystem("Commands: /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /exit")
+		m.addSystem("Commands: /model, /mode, /agent, /memory, /clear, /read, /list, /grep, /run, /write, /edit, /git, /todo, /exit")
 		return m, nil
 
 	default:
@@ -541,6 +554,58 @@ func (m *Model) runWithApproval(tool, description string, params map[string]any,
 	default:
 		return m, fn()
 	}
+}
+
+func (m *Model) handleTodo(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.addSystem(m.todos.Render())
+		return m, nil
+	}
+
+	sub := args[0]
+	switch sub {
+	case "add", "a":
+		if len(args) < 2 {
+			m.errMsg = "usage: /todo add <text>"
+			return m, nil
+		}
+		text := strings.Join(args[1:], " ")
+		id := m.todos.Add(text)
+		_ = m.todoStore.Save(m.todos)
+		m.addSystem(fmt.Sprintf("Added todo %s: %s", id, text))
+	case "done", "d":
+		if len(args) < 2 {
+			m.errMsg = "usage: /todo done <id>"
+			return m, nil
+		}
+		if m.todos.MarkDone(args[1]) {
+			_ = m.todoStore.Save(m.todos)
+			m.addSystem(fmt.Sprintf("Marked %s done", args[1]))
+		} else {
+			m.errMsg = fmt.Sprintf("todo %s not found", args[1])
+		}
+	case "remove", "rm":
+		if len(args) < 2 {
+			m.errMsg = "usage: /todo remove <id>"
+			return m, nil
+		}
+		if m.todos.Remove(args[1]) {
+			_ = m.todoStore.Save(m.todos)
+			m.addSystem(fmt.Sprintf("Removed %s", args[1]))
+		} else {
+			m.errMsg = fmt.Sprintf("todo %s not found", args[1])
+		}
+	case "clear":
+		m.todos.Clear()
+		_ = m.todoStore.Save(m.todos)
+		m.addSystem("Cleared todos")
+	case "list", "ls":
+		m.addSystem(m.todos.Render())
+	default:
+		m.errMsg = "usage: /todo [add|done|remove|clear|list]"
+	}
+	m.updateViewport()
+	return m, nil
 }
 
 func (m *Model) showResult(res tools.Result) {
@@ -841,6 +906,9 @@ func (m Model) View() string {
 	}
 	if m.totalTokens > 0 {
 		status.WriteString(fmt.Sprintf("| tokens: %d ", m.totalTokens))
+	}
+	if m.todos.PendingCount() > 0 {
+		status.WriteString(fmt.Sprintf("| todos: %d ", m.todos.PendingCount()))
 	}
 
 	bar := statusStyle.Width(m.viewport.Width).Render(status.String())

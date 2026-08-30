@@ -182,13 +182,17 @@ func buildSystemPrompt() string {
 - git_diff(cwd)
 - write_file(path, content)
 - edit_file(path, old_string, new_string)
+- add_todo(text)
+- list_todos()
+- mark_done(id)
 
 Rules:
-1. Use the fewest tools possible.
-2. To create or overwrite a file, use write_file. NEVER use exec with echo or redirection.
-3. To change a file, use edit_file with old_string and new_string. NEVER use sed or sed inside exec.
-4. exec is only for commands like git, go, ls, make, tests, etc.
-5. Prefer reading/grepping before running commands.
+1. For multi-step tasks, first create a plan using add_todo. As you finish each step, call mark_done. Call list_todos if you need to see the current plan.
+2. Use the fewest tools possible.
+3. To create or overwrite a file, use write_file. NEVER use exec with echo or redirection.
+4. To change a file, use edit_file with old_string and new_string. NEVER use sed or sed inside exec.
+5. exec is only for commands like git, go, ls, make, tests, etc.
+6. Prefer reading/grepping before running commands.
 
 When you need a tool, you MUST respond with ONLY a JSON object in one of these exact forms, with no explanation before or after:
 

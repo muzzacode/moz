@@ -55,7 +55,7 @@ func (p *Policy) ensureDefaults() {
 func (p *Policy) For(tool string) Level {
 	p.ensureDefaults()
 	switch tool {
-	case "read_file", "list_dir", "grep", "git_status", "git_diff", "web_search":
+	case "read_file", "list_dir", "grep", "git_status", "git_diff", "web_search", "add_todo", "list_todos", "mark_done":
 		return p.Read
 	case "write_file":
 		return p.Write

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/muzzacode/moz/internal/safepath"
+	"github.com/muzzacode/moz/internal/todo"
 )
 
 type Result struct {
@@ -34,11 +35,15 @@ type Match struct {
 }
 
 type Toolkit struct {
-	Safe *safepath.Policy
+	Safe  *safepath.Policy
+	Todos *todo.List
 }
 
-func New(safe *safepath.Policy) *Toolkit {
-	return &Toolkit{Safe: safe}
+func New(safe *safepath.Policy, todos *todo.List) *Toolkit {
+	if todos == nil {
+		todos = todo.New()
+	}
+	return &Toolkit{Safe: safe, Todos: todos}
 }
 
 func (tk *Toolkit) ReadFile(path string) (string, error) {

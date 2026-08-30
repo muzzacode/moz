@@ -63,6 +63,7 @@ In the TUI:
 - `/write <path> <content>` — write a file (asks for approval).
 - `/edit <path> <old> -> <new>` — replace text in a file (asks for approval).
 - `/git status | diff | commit <msg>` — run git commands.
+- `/todo [add|done|remove|clear|list]` — manage session todos.
 - `/memory` — show current session memory summary.
 - `/clear` — start a new session.
 - `/exit` — quit.
@@ -83,11 +84,17 @@ Moz reads `~/.config/moz/config.yaml` and model profiles from `~/.config/moz/mod
 ollama_base_url: http://127.0.0.1:11434
 memory_dir: ~/.config/moz/memory
 agent: false
+approval:
+  read: always
+  write: ask
+  edit: ask
+  exec: ask
+  git: always
 ```
 
 ## Project status
 
-Phase 4 done: agent loop with model-driven tool calls, real-time status bar (step, elapsed time, token usage), and approval model. Toggle with `/agent on | off`.
+Phase 5 done: agent loop with planning/todo system (`add_todo`, `list_todos`, `mark_done`), `web_search`, `write_file`, `edit_file`, per-tool aliases, and a separate `edit` approval level.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e

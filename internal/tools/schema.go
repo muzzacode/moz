@@ -70,6 +70,42 @@ func Definitions() []Definition {
 			},
 		},
 		{
+			Name:        "add_todo",
+			Description: "Add a task to the session todo list. Use this when the user asks for a plan or when breaking a multi-step task into steps.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"text": map[string]string{
+						"type":        "string",
+						"description": "The todo text",
+					},
+				},
+				"required": []string{"text"},
+			},
+		},
+		{
+			Name:        "list_todos",
+			Description: "List all session todos.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "mark_done",
+			Description: "Mark a session todo as done.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]string{
+						"type":        "string",
+						"description": "The todo ID or a prefix of it",
+					},
+				},
+				"required": []string{"id"},
+			},
+		},
+		{
 			Name:        "git_status",
 			Description: "Show the git status of a repository.",
 			Parameters: map[string]interface{}{

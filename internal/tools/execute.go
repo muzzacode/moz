@@ -41,6 +41,10 @@ var toolAliases = map[string]string{
 	"git_commit":     "git_commit",
 	"web_search":     "web_search",
 	"search_web":     "web_search",
+	"add_todo":       "add_todo",
+	"list_todos":     "list_todos",
+	"mark_done":      "mark_done",
+	"complete_todo":  "mark_done",
 }
 
 func resolveToolName(name string) string {
@@ -181,6 +185,34 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 		}
 		data, _ := json.MarshalIndent(results, "", "  ")
 		tr.Content = string(data)
+
+	case "add_todo":
+		var args struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		id := tk.Todos.Add(args.Text)
+		tr.Content = fmt.Sprintf("added todo %s", id)
+
+	case "list_todos":
+		tr.Content = tk.Todos.Render()
+
+	case "mark_done":
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		if !tk.Todos.MarkDone(args.ID) {
+			tr.Error = fmt.Sprintf("todo %s not found", args.ID)
+			return tr
+		}
+		tr.Content = fmt.Sprintf("marked %s done", args.ID)
 
 	case "git_status":
 		var args struct {
