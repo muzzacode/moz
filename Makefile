@@ -2,7 +2,7 @@ SHELL := /bin/bash
 BINARY := moz
 INSTALL_DIR := $(HOME)/.local/bin
 
-.PHONY: build install uninstall run test clean clean-bin bootstrap vet help
+.PHONY: build install uninstall run test clean clean-bin bootstrap vet help ci
 
 build:
 	go build -o bin/$(BINARY) ./cmd/moz
@@ -32,6 +32,8 @@ clean-bin:
 
 bootstrap:
 	./bootstrap.sh
+
+ci: vet test
 
 help:
 	@echo "Available targets:"

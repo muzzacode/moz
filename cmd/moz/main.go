@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	modelID    string
-	mode       string
-	task       string
+	modelID     string
+	mode        string
+	task        string
 	autoApprove bool
+	files       []string
 )
 
 func main() {
@@ -34,6 +35,7 @@ func main() {
 	rootCmd.Flags().StringVar(&mode, "mode", "", "mode: adaptive, manual, or a profile id")
 	rootCmd.Flags().StringVar(&task, "task", "", "run a single task in headless mode and exit")
 	rootCmd.Flags().BoolVar(&autoApprove, "yes", false, "auto-approve all tool calls in headless mode")
+	rootCmd.Flags().StringSliceVar(&files, "files", nil, "file paths to include as context for --task")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -87,7 +89,7 @@ func run(cmd *cobra.Command, args []string) error {
 		if cfg.Agent {
 			cfg.Agent = false
 		}
-		return runner.RunTask(context.Background(), cfg, registry, store, task, autoApprove)
+		return runner.RunTask(context.Background(), cfg, registry, store, task, files, autoApprove)
 	}
 
 	return tui.Run(cfg, registry, store)

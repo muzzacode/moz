@@ -19,7 +19,7 @@ import (
 // RunTask executes a single agent task without the TUI. If autoApprove is true,
 // all tool calls are approved automatically. It prints progress to stderr and the
 // final answer to stdout.
-func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, store *memory.Store, task string, autoApprove bool) error {
+func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, store *memory.Store, task string, files []string, autoApprove bool) error {
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 	allowed := []string{cwd, home}
@@ -31,6 +31,27 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 	todoStore := todo.NewStore(cfg)
 	todos, _ := todoStore.Load()
 	tk := tools.New(safe, todos)
+
+	if len(files) > 0 {
+		var ctxB strings.Builder
+		for _, p := range files {
+			resolved, err := safe.Resolve(p)
+			if err != nil {
+				return fmt.Errorf("file not allowed: %s", p)
+			}
+			data, err := os.ReadFile(resolved)
+			if err != nil {
+				return fmt.Errorf("failed to read %s: %w", p, err)
+			}
+			ctxB.WriteString("\n--- ")
+			ctxB.WriteString(p)
+			ctxB.WriteString(" ---\n")
+			ctxB.Write(data)
+		}
+		ctxB.WriteString("\n--- task ---\n")
+		ctxB.WriteString(task)
+		task = ctxB.String()
+	}
 
 	runner := agent.New(cfg, reg, tk)
 
