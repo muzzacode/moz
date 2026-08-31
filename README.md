@@ -7,11 +7,11 @@ It runs locally-first with Ollama and can promote any task to frontier cloud mod
 
 Moz is a personal, model-agnostic, agentic terminal. It runs on top of the [PAIEP](https://github.com/muzzacode/paiep) local-AI engineering platform and can promote any task to frontier open-weight models or Claude.
 
-- Local-first: uses PAIEP's Ollama runtime for fast, daily work.
-- Model-agnostic: switch between local models and cloud APIs at runtime.
-- Cross-workstation memory: event-sourced, encrypted git+age sync.
-- Beautiful TUI from day one.
-- Future: web dashboard, whisper-style voice commands.
+- Local-first: routes to local Ollama models by default and only pays for inference when the task warrants it.
+- Model-agnostic: local, cheap cloud, and frontier models behind one interface, switchable at runtime.
+- Cost-aware: tiered routing, escalation on failure, live spend display, and an optional session budget ceiling.
+- Session memory: conversations are saved locally and can be listed and resumed.
+- Not yet built: cross-machine memory sync, web dashboard, voice input.
 
 ## Requirements
 
@@ -109,8 +109,27 @@ When the agent is on, Moz decides when to call tools. It can also `web_search` v
 
 ### Modes
 
-- **adaptive** (default): classifies the task and picks the cheapest capable model, falling back to local models when cloud keys are missing.
+- **adaptive** (default): classifies the task and picks the cheapest model that suits it.
 - **manual**: stays on the model you selected.
+
+### How adaptive routing spends money
+
+Each task is scored for difficulty, which sets the **minimum** cost tier worth using. A cheap model failing a hard task costs more in wasted turns than routing it correctly once.
+
+| Task difficulty | Tier used | Typical cost per 1M tokens |
+| --- | --- | --- |
+| Below `cloud_threshold` | local Ollama | free |
+| Above `cloud_threshold` | cheap cloud | ~$0.03–0.15 in |
+| Above `premium_threshold` | frontier | ~$2–5 in |
+
+Four things keep the bill down:
+
+- **`prefer_local`** (default on) tries local first even for cloud-worthy work, relying on escalation if it struggles.
+- **Escalation**: if a model errors out or returns nothing usable, Moz retries once on the next tier up rather than failing. Local handles the bulk; cloud rescues the remainder.
+- **`max_session_cost`**: once spend reaches the ceiling, routing stops choosing paid models. Unset by default, since a hard stop mid-task can be worse than a bill.
+- **Health checks**: a local model is only offered if Ollama is actually reachable, so adaptive mode falls back to cloud instead of failing the turn.
+
+Cost preference is derived from each profile's `cost_tier`, not from the order of `models.yaml`, so a mislabelled or mis-ordered profile cannot make a paid model win over a free one.
 
 ## Configuration
 
@@ -127,6 +146,11 @@ approval:
   edit: ask
   exec: ask
   git: always
+adaptive:
+  prefer_local: true         # try local first, escalate if it struggles
+  cloud_threshold: 0.5       # task confidence needed to leave local
+  premium_threshold: 0.8     # task confidence needed for a frontier model
+  max_session_cost: 0        # USD ceiling per session; 0 means unlimited
 agent_options:
   max_turns: 40              # tool-call budget per task
   request_timeout_seconds: 300

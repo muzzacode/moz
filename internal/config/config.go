@@ -41,9 +41,15 @@ type AgentOpts struct {
 }
 
 type AdaptiveOpts struct {
-	PreferLocal    bool    `yaml:"prefer_local"`
-	MaxCostPerTurn float64 `yaml:"max_cost_per_turn"`
+	// PreferLocal keeps work on local inference unless the task is demanding.
+	PreferLocal bool `yaml:"prefer_local"`
+	// CloudThreshold is the task confidence needed to leave local inference.
 	CloudThreshold float64 `yaml:"cloud_threshold"`
+	// PremiumThreshold is the task confidence needed to use a frontier model.
+	PremiumThreshold float64 `yaml:"premium_threshold"`
+	// MaxSessionCost caps total spend for one session, in USD. Zero is
+	// unlimited. Once reached, routing stops choosing paid models.
+	MaxSessionCost float64 `yaml:"max_session_cost"`
 }
 
 func Default() *Config {
@@ -57,9 +63,12 @@ func Default() *Config {
 		DefaultModel:  "qwen2.5-coder:14b",
 		Mode:          "adaptive",
 		Adaptive: AdaptiveOpts{
-			PreferLocal:    true,
-			MaxCostPerTurn: 0.0,
-			CloudThreshold: 0.75,
+			PreferLocal:      true,
+			CloudThreshold:   0.5,
+			PremiumThreshold: 0.8,
+			// Unlimited by default: a surprise hard stop mid-task would be worse
+			// than a surprise bill. Set this to opt into a ceiling.
+			MaxSessionCost: 0,
 		},
 		// Workspace is deliberately empty: persisting the first run's directory
 		// into global config would pin every later session to it. It is an

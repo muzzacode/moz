@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muzzacode/moz/internal/adaptive"
 	"github.com/muzzacode/moz/internal/agent"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/llm"
@@ -593,6 +594,42 @@ func TestViewRendersWithoutPanicAndShowsInterruptHint(t *testing.T) {
 	m.cancel = nil
 	if strings.Contains(m.View(), "esc: interrupt") {
 		t.Fatal("idle view should not advertise interrupt")
+	}
+}
+
+// The status bar is width-limited, so its tail is truncated on narrow
+// terminals. The interrupt hint must survive because it is the only control the
+// user needs while a task is running.
+func TestInterruptHintSurvivesNarrowTerminal(t *testing.T) {
+	m := newTestModel(t)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancel = cancel
+	m.currentStep = "turn 12/40: reasoning"
+	m.elapsed = 3 * time.Minute
+	m.totalUsage.TotalTokens = 123456
+
+	for _, width := range []int{40, 60, 80, 120} {
+		m.viewport.Width = width
+		if !strings.Contains(m.View(), "esc: interrupt") {
+			t.Fatalf("interrupt hint lost at width %d", width)
+		}
+	}
+}
+
+// A configured ceiling must be visible, so routing changes are not a surprise.
+func TestStatusBarShowsBudgetWhenSet(t *testing.T) {
+	m := newTestModel(t)
+	m.viewport.Width = 200
+
+	if strings.Contains(m.View(), "/$") {
+		t.Fatal("an unlimited budget should not be displayed")
+	}
+
+	m.budget = adaptive.NewBudget(5)
+	m.budget.AddCost(1.25)
+	if !strings.Contains(m.View(), "$1.25/$5.00") {
+		t.Fatalf("expected spend against the ceiling, got:\n%s", m.View())
 	}
 }
 

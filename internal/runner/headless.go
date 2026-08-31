@@ -74,6 +74,12 @@ func RunTask(ctx context.Context, cfg *config.Config, reg *models.Registry, stor
 			return fmt.Errorf("no model available: %w", err)
 		}
 		profile = decision.Profile
+		// Show why this model was chosen. In a cost-tiered setup the reasoning
+		// matters as much as the choice.
+		fmt.Fprintf(os.Stderr, "[routing] %s\n", decision.Reason)
+		if decision.Downgraded {
+			fmt.Fprintln(os.Stderr, "[routing] using a cheaper model than the task warranted")
+		}
 	} else {
 		p, err := reg.Find(cfg.DefaultModel)
 		if err != nil {

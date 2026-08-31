@@ -47,6 +47,7 @@ type Model struct {
 	todos       *todo.List
 	todoStore   *todo.Store
 	checkpoints *checkpoint.Store
+	budget      *adaptive.Budget
 
 	profile      *models.Profile
 	mode         string
@@ -133,8 +134,10 @@ var (
 
 func New(cfg *config.Config, registry *models.Registry, store *memory.Store, initial ...*memory.Session) (*Model, error) {
 	creds := credentials.New()
-	router := adaptive.New(registry, creds)
-	router.PreferLocal = cfg.Adaptive.PreferLocal
+	// One budget for the whole session, shared with every agent run so the
+	// ceiling applies across tasks rather than resetting each time.
+	budget := adaptive.NewBudget(cfg.Adaptive.MaxSessionCost)
+	router := adaptive.NewWithOptions(registry, creds, agent.RoutingOptions(cfg), budget)
 
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
@@ -189,6 +192,7 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 		router:       router,
 		toolkit:      toolkit,
 		checkpoints:  checkpoints,
+		budget:       budget,
 		todos:        todos,
 		todoStore:    todoStore,
 		profile:      profile,
@@ -861,7 +865,9 @@ func (m *Model) startAgent(input string) tea.Cmd {
 
 	cfg := m.cfg
 	reg := m.registry
-	runner := agent.New(cfg, reg, m.toolkit)
+	// Share the session's credentials and budget so spend accumulates across
+	// tasks and the ceiling is not silently reset on each message.
+	runner := agent.NewWithDeps(cfg, reg, m.toolkit, m.creds, m.budget)
 	sess := m.session
 
 	// Group every file change made by this task so /undo reverses the task as
@@ -1152,28 +1158,38 @@ func (m Model) View() string {
 		return "Initializing Moz..."
 	}
 
+	// Ordered by importance, because a narrow terminal truncates the tail. The
+	// interrupt hint comes first while a task is running: it is the one control
+	// the user needs at that moment, so it must never be the part cut off.
 	var status strings.Builder
-	status.WriteString(fmt.Sprintf(" moz %s | mode: %s | agent: %v | model: %s ", version.Version, m.mode, m.agentEnabled, m.profile.Name))
+	if m.busy() {
+		status.WriteString(" esc: interrupt |")
+	}
+	status.WriteString(fmt.Sprintf(" moz %s | %s ", version.Version, m.profile.Name))
 
 	if m.currentStep != "" {
-		status.WriteString(fmt.Sprintf("| step: %s ", m.currentStep))
+		status.WriteString(fmt.Sprintf("| %s ", m.currentStep))
 	}
 	if m.elapsed > 0 {
-		status.WriteString(fmt.Sprintf("| time: %s ", m.elapsed.Round(time.Millisecond)))
+		status.WriteString(fmt.Sprintf("| %s ", m.elapsed.Round(time.Millisecond)))
 	}
 	if m.totalUsage.TotalTokens > 0 {
-		status.WriteString(fmt.Sprintf("| tokens: %d ", m.totalUsage.TotalTokens))
+		status.WriteString(fmt.Sprintf("| %d tok ", m.totalUsage.TotalTokens))
 	}
 	if costStr := cost.Format(m.profile.ID, m.totalUsage); costStr != "" {
-		status.WriteString(fmt.Sprintf("| cost: %s ", costStr))
+		status.WriteString(fmt.Sprintf("| %s ", costStr))
+	}
+	// Spend against a configured ceiling, so an approaching limit is visible
+	// before it silently changes routing.
+	if m.budget != nil {
+		if limit := m.budget.Limit(); limit > 0 {
+			status.WriteString(fmt.Sprintf("| $%.2f/$%.2f ", m.budget.Spent(), limit))
+		}
 	}
 	if m.todos.PendingCount() > 0 {
 		status.WriteString(fmt.Sprintf("| todos: %d ", m.todos.PendingCount()))
 	}
-	// Surface the interrupt affordance only while it applies.
-	if m.busy() {
-		status.WriteString("| esc: interrupt ")
-	}
+	status.WriteString(fmt.Sprintf("| mode: %s | agent: %v ", m.mode, m.agentEnabled))
 
 	bar := statusStyle.Width(m.viewport.Width).Render(status.String())
 

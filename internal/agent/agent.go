@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/muzzacode/moz/internal/adaptive"
@@ -37,18 +38,48 @@ type Runner struct {
 	Toolkit  *tools.Toolkit
 	Creds    *credentials.Manager
 	Router   *adaptive.Router
+	// Budget accumulates spend so routing can stop escalating once a session
+	// has cost enough.
+	Budget *adaptive.Budget
 }
 
 func New(cfg *config.Config, reg *models.Registry, tk *tools.Toolkit) *Runner {
-	creds := credentials.New()
-	router := adaptive.New(reg, creds)
-	router.PreferLocal = cfg.Adaptive.PreferLocal
+	return NewWithDeps(cfg, reg, tk, credentials.New(), nil)
+}
+
+// NewWithDeps builds a runner sharing credentials and a spend budget with the
+// caller, so cost accounting spans the whole session rather than one task.
+func NewWithDeps(
+	cfg *config.Config,
+	reg *models.Registry,
+	tk *tools.Toolkit,
+	creds *credentials.Manager,
+	budget *adaptive.Budget,
+) *Runner {
+	if creds == nil {
+		creds = credentials.New()
+	}
+	router := adaptive.NewWithOptions(reg, creds, RoutingOptions(cfg), budget)
 	return &Runner{
 		Config:   cfg,
 		Registry: reg,
 		Toolkit:  tk,
 		Creds:    creds,
 		Router:   router,
+		Budget:   router.Budget,
+	}
+}
+
+// RoutingOptions translates configuration into router settings.
+func RoutingOptions(cfg *config.Config) adaptive.Options {
+	if cfg == nil {
+		return adaptive.Options{PreferLocal: true}
+	}
+	return adaptive.Options{
+		PreferLocal:      cfg.Adaptive.PreferLocal,
+		CloudThreshold:   cfg.Adaptive.CloudThreshold,
+		PremiumThreshold: cfg.Adaptive.PremiumThreshold,
+		MaxSessionCost:   cfg.Adaptive.MaxSessionCost,
 	}
 }
 
@@ -96,25 +127,83 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 	)
 	messages = prependMessage(messages, memory.Message{Role: "system", Content: systemPrompt})
 
-	client := llm.New(profile, r.Creds)
-	if r.Config != nil {
-		client = client.WithTimeout(r.Config.RequestTimeout())
-	}
-	// Surface retries so a rate-limited provider looks like progress rather
-	// than a hang.
-	client = client.WithRetry(0, func(n llm.RetryNotice) {
-		out <- Event{
-			Type:    "warning",
-			Step:    fmt.Sprintf("provider error, retrying in %s (attempt %d/%d)", n.Delay.Round(time.Millisecond), n.Attempt, n.Max),
-			Elapsed: time.Since(start),
+	newClient := func(p *models.Profile) *llm.Client {
+		c := llm.New(p, r.Creds)
+		if r.Config != nil {
+			c = c.WithTimeout(r.Config.RequestTimeout())
 		}
-	})
+		// Surface retries so a rate-limited provider looks like progress rather
+		// than a hang.
+		return c.WithRetry(0, func(n llm.RetryNotice) {
+			out <- Event{
+				Type:    "warning",
+				Step:    fmt.Sprintf("provider error, retrying in %s (attempt %d/%d)", n.Delay.Round(time.Millisecond), n.Attempt, n.Max),
+				Elapsed: time.Since(start),
+			}
+		})
+	}
+
+	client := newClient(profile)
 	toolDefs := tools.Definitions()
 	compactCfg := compact.DefaultConfig(profile.ContextLength)
 	// Tool schemas are re-sent on every request and are invisible in the
 	// message list, so they must be charged against the budget explicitly.
 	compactCfg.FixedOverhead = tokens.EstimateJSON(toolDefs)
 	compactor := compact.New(compactCfg, client)
+
+	// escalated guards against repeatedly upgrading within one task.
+	escalated := false
+	taskClass := classOf(task)
+	// stalls counts consecutive empty replies before escalating.
+	stalls := 0
+
+	// switchTo moves the task onto another model mid-flight.
+	switchTo := func(next *models.Profile, cause, verb string) bool {
+		escalated = true
+		out <- Event{
+			Type:    "warning",
+			Step:    fmt.Sprintf("%s on %s; %s to %s", cause, profile.Name, verb, next.Name),
+			Elapsed: time.Since(start),
+		}
+		profile = next
+		client = newClient(profile)
+		cfg := compact.DefaultConfig(profile.ContextLength)
+		cfg.FixedOverhead = tokens.EstimateJSON(toolDefs)
+		compactor = compact.New(cfg, client)
+		// The replacement may have a different tool-calling style.
+		messages = replaceSystemPrompt(messages, appendProjectContext(
+			buildSystemPrompt(profile.SupportsNativeTools()),
+			verifyState.command,
+			instructions,
+		))
+		return true
+	}
+
+	// tryEscalate moves up a tier when the current model is not capable enough.
+	tryEscalate := func(cause string) bool {
+		if escalated || r.Router == nil {
+			return false
+		}
+		if next := r.Router.Escalate(profile, taskClass); next != nil {
+			return switchTo(next, cause, "escalating")
+		}
+		return false
+	}
+
+	// tryRecover handles a model that cannot run at all, such as a provider with
+	// no credit left. Escalation cannot help there, but another provider can.
+	tryRecover := func(cause string) bool {
+		if escalated || r.Router == nil {
+			return false
+		}
+		if next := r.Router.Escalate(profile, taskClass); next != nil {
+			return switchTo(next, cause, "escalating")
+		}
+		if next := r.Router.Fallback(profile, taskClass); next != nil {
+			return switchTo(next, cause, "falling back")
+		}
+		return false
+	}
 
 	maxTurns := r.maxTurns()
 	for turn := 0; turn < maxTurns; turn++ {
@@ -144,10 +233,37 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 				out <- Event{Type: "cancelled", Step: "cancelled", Elapsed: time.Since(start)}
 				return
 			}
+			// Retries inside the client are already exhausted, so this model is
+			// not going to succeed. Another one might, at any tier: the failure
+			// may be the provider rather than the model's ability.
+			if tryRecover("model failed") {
+				continue
+			}
 			out <- Event{Type: "error", Error: err.Error(), Elapsed: time.Since(start)}
 			return
 		}
 
+		// An empty reply means the model produced neither an answer nor a tool
+		// call, which is a hallmark of a model that cannot follow the protocol.
+		if len(resp.ToolCalls) == 0 && strings.TrimSpace(resp.Content) == "" {
+			stalls++
+			if stalls >= maxStalls && tryEscalate("model returned nothing usable") {
+				stalls = 0
+				continue
+			}
+			if stalls >= maxStalls {
+				out <- Event{Type: "error", Error: "model returned no usable output", Elapsed: time.Since(start)}
+				return
+			}
+			continue
+		}
+		stalls = 0
+
+		// Record spend before the next routing decision so a budget ceiling is
+		// enforced against actual usage rather than an estimate.
+		if r.Budget != nil {
+			r.Budget.Add(profile.ID, resp.Usage)
+		}
 		out <- Event{Type: "usage", Usage: resp.Usage, Elapsed: time.Since(start)}
 
 		if len(resp.ToolCalls) == 0 {
@@ -255,7 +371,36 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 		_ = turnStart
 	}
 
-	out <- Event{Type: "error", Error: "reached maximum agent turns", Elapsed: time.Since(start)}
+	out <- Event{Type: "error", Error: fmt.Sprintf("reached the %d turn limit without finishing", maxTurns), Elapsed: time.Since(start)}
+}
+
+// maxStalls is how many consecutive empty replies are tolerated before the model
+// is considered incapable of following the protocol.
+const maxStalls = 2
+
+// classOf classifies a task so escalation searches the right stack.
+func classOf(task string) models.TaskClass {
+	return adaptive.Classify(task).Class
+}
+
+// replaceSystemPrompt swaps the leading system message.
+//
+// Escalating between providers can change the tool-calling style, so the
+// operating instructions must be rewritten rather than appended to.
+func replaceSystemPrompt(msgs []memory.Message, prompt string) []memory.Message {
+	out := make([]memory.Message, 0, len(msgs)+1)
+	replaced := false
+	for _, m := range msgs {
+		if !replaced && m.Role == "system" {
+			m.Content = prompt
+			replaced = true
+		}
+		out = append(out, m)
+	}
+	if !replaced {
+		return prependMessage(out, memory.Message{Role: "system", Content: prompt, Timestamp: time.Now().UTC()})
+	}
+	return out
 }
 
 func prependMessage(msgs []memory.Message, m memory.Message) []memory.Message {
