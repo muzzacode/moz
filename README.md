@@ -103,6 +103,8 @@ When the agent is on, Moz decides when to call tools. It can also `web_search` v
 - **Undo.** Every file the agent touches is snapshotted first, so `/undo` restores the previous state byte for byte, including file permissions.
 - **Native tool calling.** Providers that support structured tool calls use them directly; only models without native support are taught a text protocol.
 - **Automatic retries.** Rate limits and transient provider failures are retried with exponential backoff and jitter instead of losing the task.
+- **Repository-aware search.** `find_files` locates files by name or glob, `outline` lists a file's declarations so a large file can be understood without reading it, and `grep` skips ignored directories and binary files with capped results. On an 18,000-file repo this avoids scanning the 97% that lives in `.git`, `node_modules`, and `target`.
+- **Project instructions.** If the repo has an `AGENTS.md` (or `.mozrules`, `CLAUDE.md`, `.cursorrules`, `CONVENTIONS.md`), Moz loads it and follows it in preference to its own defaults.
 
 ### Modes
 

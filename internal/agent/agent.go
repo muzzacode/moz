@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/muzzacode/moz/internal/adaptive"
@@ -12,6 +13,7 @@ import (
 	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/project"
 	"github.com/muzzacode/moz/internal/tokens"
 	"github.com/muzzacode/moz/internal/tools"
 	openai "github.com/sashabaranov/go-openai"
@@ -72,9 +74,25 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 	messages := append([]memory.Message{}, session.Messages...)
 	messages = append(messages, memory.Message{Role: "user", Content: task})
 
+	// Load the project's own instructions, which carry knowledge that cannot be
+	// inferred from source, such as a required toolchain version.
+	var instructions *project.Instructions
+	if cwd, err := os.Getwd(); err == nil {
+		if ins, ok := project.Load(cwd); ok {
+			instructions = ins
+			out <- Event{
+				Type:    "step",
+				Step:    "loaded project instructions from " + ins.Source,
+				Model:   profile.Name,
+				Elapsed: time.Since(start),
+			}
+		}
+	}
+
 	systemPrompt := appendProjectContext(
 		buildSystemPrompt(profile.SupportsNativeTools()),
 		verifyState.command,
+		instructions,
 	)
 	messages = prependMessage(messages, memory.Message{Role: "system", Content: systemPrompt})
 

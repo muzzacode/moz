@@ -38,8 +38,40 @@ func Definitions() []Definition {
 			},
 		},
 		{
+			Name:        "find_files",
+			Description: "Find files by name or glob, ranked by relevance. Use this to locate a file instead of grepping for it. Respects .gitignore.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]string{
+						"type":        "string",
+						"description": "Filename, fragment, or glob such as *_test.go",
+					},
+					"path": map[string]string{
+						"type":        "string",
+						"description": "Directory to search. Defaults to the current directory.",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        "outline",
+			Description: "List the top-level declarations in a source file with line numbers. Use this to understand a large file before reading it. Supports Go, Python, JavaScript, TypeScript, Java, Rust, shell, and Makefiles.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]string{
+						"type":        "string",
+						"description": "File to outline",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+		{
 			Name:        "grep",
-			Description: "Search for a regex pattern in files. Use this to find symbols, usages, or references.",
+			Description: "Search file contents with a regular expression. Skips ignored directories and binary files, and caps results. Use find_files to locate a file by name instead.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -50,6 +82,14 @@ func Definitions() []Definition {
 					"path": map[string]string{
 						"type":        "string",
 						"description": "File or directory to search. Defaults to current directory.",
+					},
+					"include": map[string]string{
+						"type":        "string",
+						"description": "Optional glob restricting which files are searched, such as *.go",
+					},
+					"ignore_case": map[string]any{
+						"type":        "boolean",
+						"description": "Match case-insensitively. Defaults to false.",
 					},
 				},
 				"required": []string{"pattern"},

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/project"
 )
 
 // A native-tools provider must not be taught a JSON output contract, because
@@ -52,12 +53,29 @@ func TestBothPromptsShareBehaviouralRules(t *testing.T) {
 }
 
 func TestAppendProjectContext(t *testing.T) {
-	if got := appendProjectContext("base", ""); got != "base" {
-		t.Fatalf("empty command should not change the prompt, got %q", got)
+	if got := appendProjectContext("base", "", nil); got != "base" {
+		t.Fatalf("nothing to add should leave the prompt unchanged, got %q", got)
 	}
-	got := appendProjectContext("base", "make ci")
+	got := appendProjectContext("base", "make ci", nil)
 	if !strings.Contains(got, "make ci") {
 		t.Fatalf("verification command missing: %q", got)
+	}
+}
+
+// A project's own instructions must be present and must be told to take
+// precedence over Moz's generic defaults.
+func TestAppendProjectContextIncludesInstructions(t *testing.T) {
+	ins := &project.Instructions{Source: "AGENTS.md", Content: "Requires Java 25."}
+	got := appendProjectContext("base", "mvn test", ins)
+
+	for _, want := range []string{"base", "mvn test", "AGENTS.md", "Requires Java 25.", "override"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Instructions come last so they carry the most weight.
+	if strings.Index(got, "AGENTS.md") < strings.Index(got, "mvn test") {
+		t.Fatal("instructions should follow the verification command")
 	}
 }
 

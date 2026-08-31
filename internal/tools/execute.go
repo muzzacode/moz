@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/muzzacode/moz/internal/index"
 )
 
 type ToolCall struct {
@@ -28,6 +30,12 @@ var toolAliases = map[string]string{
 	"grep":           "grep",
 	"search":         "grep",
 	"search_files":   "grep",
+	"find_files":     "find_files",
+	"find_file":      "find_files",
+	"glob":           "find_files",
+	"outline":        "outline",
+	"symbols":        "outline",
+	"file_outline":   "outline",
 	"exec":           "exec",
 	"run":            "exec",
 	"command":        "exec",
@@ -47,6 +55,25 @@ var toolAliases = map[string]string{
 	"list_todos":     "list_todos",
 	"mark_done":      "mark_done",
 	"complete_todo":  "mark_done",
+}
+
+// renderSearch formats matches as compact grep-style lines. This is far cheaper
+// in tokens than JSON, which matters because search results are among the
+// largest things the agent reads.
+func renderSearch(res *index.SearchResult) string {
+	if len(res.Matches) == 0 {
+		return fmt.Sprintf("no matches (%d files searched)", res.FilesScanned)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d match(es) in %d file(s)", len(res.Matches), res.FilesScanned)
+	if res.Truncated {
+		b.WriteString(" [truncated: narrow the pattern or use include]")
+	}
+	b.WriteString("\n")
+	for _, m := range res.Matches {
+		fmt.Fprintf(&b, "%s:%d: %s\n", m.File, m.Line, m.Content)
+	}
+	return b.String()
 }
 
 func resolveToolName(name string) string {
@@ -97,8 +124,10 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 
 	case "grep":
 		var args struct {
-			Pattern string `json:"pattern"`
-			Path    string `json:"path"`
+			Pattern    string `json:"pattern"`
+			Path       string `json:"path"`
+			Include    string `json:"include"`
+			IgnoreCase bool   `json:"ignore_case"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
@@ -107,13 +136,54 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 		if args.Path == "" {
 			args.Path = "."
 		}
-		matches, err := tk.Grep(args.Pattern, args.Path)
+		res, err := tk.GrepWithOptions(args.Pattern, args.Path, index.SearchOptions{
+			Include:    args.Include,
+			IgnoreCase: args.IgnoreCase,
+		})
 		if err != nil {
 			tr.Error = err.Error()
 			return tr
 		}
-		data, _ := json.MarshalIndent(matches, "", "  ")
-		tr.Content = string(data)
+		tr.Content = renderSearch(res)
+
+	case "find_files":
+		var args struct {
+			Query string `json:"query"`
+			Path  string `json:"path"`
+			Limit int    `json:"limit"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		if args.Path == "" {
+			args.Path = "."
+		}
+		paths, err := tk.FindFiles(args.Query, args.Path, args.Limit)
+		if err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		if len(paths) == 0 {
+			tr.Content = fmt.Sprintf("no files matching %q", args.Query)
+			return tr
+		}
+		tr.Content = fmt.Sprintf("%d file(s):\n%s", len(paths), strings.Join(paths, "\n"))
+
+	case "outline":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			tr.Error = fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			return tr
+		}
+		outline, err := tk.Outline(args.Path)
+		if err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		tr.Content = outline.Render()
 
 	case "exec":
 		var args struct {

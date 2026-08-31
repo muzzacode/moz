@@ -544,20 +544,24 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			path = args[1]
 		}
 		return m.runWithApproval("grep", pattern, map[string]any{"pattern": pattern, "path": path}, func() tea.Cmd {
-			matches, err := m.toolkit.Grep(pattern, path)
+			res, err := m.toolkit.Grep(pattern, path)
 			if err != nil {
 				m.errMsg = err.Error()
 				m.updateViewport()
 				return nil
 			}
 			var b strings.Builder
-			b.WriteString(fmt.Sprintf("%d matches\n", len(matches)))
-			for _, match := range matches {
-				rel, _ := filepath.Rel(path, match.File)
-				if rel == "" {
+			fmt.Fprintf(&b, "%d matches in %d files", len(res.Matches), res.FilesScanned)
+			if res.Truncated {
+				b.WriteString(" (truncated)")
+			}
+			b.WriteString("\n")
+			for _, match := range res.Matches {
+				rel, relErr := filepath.Rel(path, match.File)
+				if relErr != nil || rel == "" {
 					rel = match.File
 				}
-				b.WriteString(fmt.Sprintf("%s:%d: %s\n", rel, match.Line, match.Content))
+				fmt.Fprintf(&b, "%s:%d: %s\n", rel, match.Line, match.Content)
 			}
 			m.addSystem(b.String())
 			return nil

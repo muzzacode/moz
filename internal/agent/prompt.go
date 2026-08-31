@@ -1,6 +1,10 @@
 package agent
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/muzzacode/moz/internal/project"
+)
 
 // sharedRules are the behavioural rules that apply to every provider.
 //
@@ -13,6 +17,12 @@ Working method:
 1. For multi-step work, plan first with add_todo, then mark_done as you complete each step. Use list_todos to re-check the plan.
 2. Investigate before acting. Read or grep the relevant files rather than guessing.
 3. Use the fewest tool calls that will do the job.
+
+Navigating a codebase:
+- Use find_files to locate a file by name or glob. Do not grep for filenames.
+- Use outline to see a large file's declarations and line numbers before reading it.
+- Use grep with include to restrict the search, for example include "*.go".
+- If a search reports that it was truncated, narrow the pattern instead of reading everything.
 
 Editing files:
 4. Use write_file only to create a new file. It refuses to overwrite, so never use it on an existing file.
@@ -41,7 +51,9 @@ const textToolsPrompt = sharedRules + `
 Available tools:
 - read_file(path)
 - list_dir(path)
-- grep(pattern, path)
+- find_files(query, path?)
+- outline(path)
+- grep(pattern, path?, include?, ignore_case?)
 - web_search(query)
 - web_fetch(url)
 - exec(command)
@@ -75,16 +87,23 @@ func buildSystemPrompt(nativeTools bool) string {
 	return textToolsPrompt
 }
 
-// appendProjectContext adds repository-specific guidance, such as the
-// verification command, so the model knows how to check its own work.
-func appendProjectContext(prompt string, verifyCmd string) string {
-	if verifyCmd == "" {
-		return prompt
-	}
+// appendProjectContext adds repository-specific guidance: the verification
+// command and any instruction file the project ships.
+//
+// Instructions come last so they carry the most weight, and because a project's
+// own conventions should win over Moz's generic defaults.
+func appendProjectContext(prompt, verifyCmd string, ins *project.Instructions) string {
 	var b strings.Builder
 	b.WriteString(prompt)
-	b.WriteString("\n\nThis project is verified with: ")
-	b.WriteString(verifyCmd)
-	b.WriteString("\nRun it after making changes to confirm they are correct.")
+
+	if verifyCmd != "" {
+		b.WriteString("\n\nThis project is verified with: ")
+		b.WriteString(verifyCmd)
+		b.WriteString("\nRun it after making changes to confirm they are correct.")
+	}
+	if ins != nil {
+		b.WriteString("\n\n")
+		b.WriteString(ins.Render())
+	}
 	return b.String()
 }
