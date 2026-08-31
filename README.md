@@ -116,11 +116,27 @@ When the agent is on, Moz decides when to call tools. It can also `web_search` v
 
 Each task is scored for difficulty, which sets the **minimum** cost tier worth using. A cheap model failing a hard task costs more in wasted turns than routing it correctly once.
 
-| Task difficulty | Tier used | Typical cost per 1M tokens |
+| Task difficulty | Tier used | Cost per 1M in/out |
 | --- | --- | --- |
 | Below `cloud_threshold` | local Ollama | free |
-| Above `cloud_threshold` | cheap cloud | ~$0.03–0.15 in |
-| Above `premium_threshold` | frontier | ~$2–5 in |
+| Above `cloud_threshold` | cheap cloud | $0.03–0.25 |
+| Above `premium_threshold` | frontier | $1.40–25 |
+
+The lineup is picked on measured capability per dollar, not brand:
+
+| Profile | Model | In/Out per 1M | Benchmarks (intel/code/agent) |
+| --- | --- | --- | --- |
+| `local-coder` | Qwen2.5 Coder 14B (Ollama) | free | — |
+| `qwen-flash` | `qwen/qwen3.7-flash` | $0.03 / $0.13 | 1M context, vision |
+| `deepseek-flash` | `deepseek/deepseek-v4-flash-0731` | $0.065 / $0.18 | 51.8 / 69.1 / 48.4 |
+| **`glm-flash`** | **`z-ai/glm-5.3-flash`** | **$0.075 / $0.25** | **57.5 / 71.5 / 58.2** |
+| `glm-5.3` | `z-ai/glm-5.3` | $1.40 / $4.40 | 59.5 / 74.8 / 59.1 |
+| `grok-4.6` | `x-ai/grok-4.6` | $2.00 / $6.00 | 60.9 / 76.8 / 58.7 |
+| `claude-opus-5` | `anthropic/claude-opus-5` | $5.00 / $25.00 | 63.1 / 78.0 / 59.2 |
+
+GLM 5.3 Flash is the default workhorse because it benchmarks **above Claude Sonnet 5** (55.3 intelligence at $2/$10) while costing about 27x less. Paying frontier prices for ordinary coding is not a quality decision, it is an unexamined one.
+
+Every paid model is reached through OpenRouter, so a single key covers all three tiers. Direct Anthropic and OpenAI profiles exist for `--model` but are deliberately kept out of the stacks, so routing never depends on a second billing relationship being active.
 
 Four things keep the bill down:
 

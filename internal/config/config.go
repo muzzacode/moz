@@ -60,8 +60,9 @@ func Default() *Config {
 	return &Config{
 		OllamaBaseURL: "http://127.0.0.1:11434/v1/",
 		MemoryDir:     filepath.Join(home, ".config", "moz", "memory"),
-		DefaultModel:  "qwen2.5-coder:14b",
-		Mode:          "adaptive",
+		// A profile ID, not a model name: the registry is keyed by profile.
+		DefaultModel: "local-coder",
+		Mode:         "adaptive",
 		Adaptive: AdaptiveOpts{
 			PreferLocal:      true,
 			CloudThreshold:   0.5,

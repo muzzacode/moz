@@ -12,20 +12,32 @@ type Price struct {
 	Output float64
 }
 
+// knownPrices maps a profile ID to its published price per million tokens.
+//
+// These feed the session budget, so an inaccurate entry means the ceiling is
+// enforced against the wrong number. Keep them in step with the profiles in
+// internal/models.
 var knownPrices = map[string]Price{
-	"claude-sonnet-5":    {Input: 2.0, Output: 10.0},
-	"claude-opus-5":      {Input: 5.0, Output: 25.0},
-	"claude-haiku-4-5":   {Input: 1.0, Output: 5.0},
-	"glm-5.3":            {Input: 0.50, Output: 1.50},
-	"openai-gpt-4o":      {Input: 2.50, Output: 10.0},
-	"openai-gpt-4o-mini": {Input: 0.15, Output: 0.60},
-	"openrouter-default": {Input: 0.10, Output: 0.30},
-	"openrouter-fast":    {Input: 0.03, Output: 0.13},
-	"openrouter-free":    {Input: 0, Output: 0},
-	"coding-default":     {Input: 0, Output: 0},
-	"coding-quality":     {Input: 0, Output: 0},
-	"general-default":    {Input: 0, Output: 0},
-	"vision-default":     {Input: 0, Output: 0},
+	// Local inference is free.
+	"local-coder": {Input: 0, Output: 0},
+
+	// Cheap cloud, the workhorse tier.
+	"qwen-flash":     {Input: 0.030, Output: 0.130},
+	"deepseek-flash": {Input: 0.065, Output: 0.180},
+	"glm-flash":      {Input: 0.075, Output: 0.250},
+
+	// Frontier.
+	"glm-5.3":       {Input: 1.40, Output: 4.40},
+	"grok-4.6":      {Input: 2.00, Output: 6.00},
+	"claude-opus-5": {Input: 5.00, Output: 25.00},
+
+	// Direct provider access.
+	"claude-sonnet-5-direct": {Input: 2.00, Output: 10.00},
+	"openai-gpt-4o":          {Input: 2.50, Output: 10.00},
+	"openai-gpt-4o-mini":     {Input: 0.15, Output: 0.60},
+
+	// The free router bills nothing.
+	"openrouter-free": {Input: 0, Output: 0},
 }
 
 func Estimate(profileID string, u openai.Usage) float64 {

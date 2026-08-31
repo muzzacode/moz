@@ -415,14 +415,14 @@ func TestBudgetUnlimitedByDefault(t *testing.T) {
 // Budget must charge using the profile's real prices.
 func TestBudgetAddUsesProfilePricing(t *testing.T) {
 	b := NewBudget(0)
-	b.Add("claude-sonnet-5", openai.Usage{PromptTokens: 1_000_000, CompletionTokens: 0})
-	if got := b.Spent(); got < 1.9 || got > 2.1 {
-		t.Fatalf("expected about $2.00 for 1M input tokens, got %.4f", got)
+	b.Add("claude-opus-5", openai.Usage{PromptTokens: 1_000_000, CompletionTokens: 0})
+	if got := b.Spent(); got < 4.9 || got > 5.1 {
+		t.Fatalf("expected about $5.00 for 1M input tokens, got %.4f", got)
 	}
 
 	// A local model is free and must not accumulate spend.
 	b2 := NewBudget(0)
-	b2.Add("coding-default", openai.Usage{PromptTokens: 5_000_000, CompletionTokens: 5_000_000})
+	b2.Add("local-coder", openai.Usage{PromptTokens: 5_000_000, CompletionTokens: 5_000_000})
 	if b2.Spent() != 0 {
 		t.Fatalf("local inference should cost nothing, got %.4f", b2.Spent())
 	}

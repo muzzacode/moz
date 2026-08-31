@@ -106,12 +106,27 @@ type Registry struct {
 	byStack  map[string]*Stack
 }
 
+// DefaultProfiles returns the built-in model lineup.
+//
+// The lineup is chosen on price-for-capability, measured rather than assumed.
+// Two facts drive it:
+//
+//   - GLM 5.3 Flash costs $0.075/$0.25 per million tokens and benchmarks higher
+//     than Claude Sonnet 5 at $2/$10. It is the workhorse for that reason: about
+//     27x cheaper for equal or better coding ability.
+//   - Frontier models are only worth their price on genuinely hard reasoning, so
+//     they sit at the end of the stacks and are gated behind a higher threshold.
+//
+// Paid models are reached through OpenRouter so that one key covers every tier.
+// Direct provider profiles are kept for when their billing is set up, but are
+// left out of the stacks so a dead key cannot break routing.
 func DefaultProfiles() *Registry {
 	return &Registry{
 		Profiles: []Profile{
+			// ---------- Local, free ----------
 			{
-				ID:            "coding-default",
-				Name:          "PAIEP Coding Default",
+				ID:            "local-coder",
+				Name:          "Local Qwen2.5 Coder 14B",
 				ProviderKind:  ProviderOllama,
 				Model:         "qwen2.5-coder:14b",
 				BaseURL:       "http://127.0.0.1:11434/v1/",
@@ -119,164 +134,192 @@ func DefaultProfiles() *Registry {
 				ContextLength: 131072,
 				CostTier:      "local",
 				DefaultParams: map[string]any{
-					"temperature": 0.4,
+					"temperature": 0.2,
 					"max_tokens":  4096,
 				},
 			},
+
+			// ---------- Cheap cloud, the workhorse tier ----------
 			{
-				ID:            "coding-quality",
-				Name:          "PAIEP Coding Quality",
-				ProviderKind:  ProviderOllama,
-				Model:         "qwen2.5-coder:14b",
-				BaseURL:       "http://127.0.0.1:11434/v1/",
-				Capabilities:  []Capability{CapToolCalling, CapCode, CapReasoning},
-				ContextLength: 131072,
-				CostTier:      "local",
+				// Best measured capability per dollar in this tier: intelligence
+				// 57.5, coding 71.5, agentic 58.2 at $0.075/$0.25.
+				ID:               "glm-flash",
+				Name:             "GLM 5.3 Flash",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "z-ai/glm-5.3-flash",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning, CapLongContext},
+				ContextLength:    1048576,
+				CostTier:         "cloud-cheap",
+				DefaultParams: map[string]any{
+					"temperature": 0.3,
+					"max_tokens":  8192,
+				},
+			},
+			{
+				// Cheapest usable option, and the only one here with vision.
+				ID:               "qwen-flash",
+				Name:             "Qwen 3.7 Flash",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "qwen/qwen3.7-flash",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapVision, CapLongContext},
+				ContextLength:    1000000,
+				CostTier:         "cloud-cheap",
 				DefaultParams: map[string]any{
 					"temperature": 0.3,
 					"max_tokens":  4096,
 				},
 			},
 			{
-				ID:            "general-default",
-				Name:          "PAIEP General Default",
-				ProviderKind:  ProviderOllama,
-				Model:         "qwen2.5-coder:14b",
-				BaseURL:       "http://127.0.0.1:11434/v1/",
-				Capabilities:  []Capability{},
-				ContextLength: 131072,
-				CostTier:      "local",
-				DefaultParams: map[string]any{
-					"temperature": 0.7,
-					"max_tokens":  4096,
-				},
-			},
-			{
-				ID:            "vision-default",
-				Name:          "PAIEP Vision Default",
-				ProviderKind:  ProviderOllama,
-				Model:         "qwen2.5-coder:14b",
-				BaseURL:       "http://127.0.0.1:11434/v1/",
-				Capabilities:  []Capability{CapVision, CapToolCalling},
-				ContextLength: 131072,
-				CostTier:      "local",
-				DefaultParams: map[string]any{
-					"temperature": 0.4,
-					"max_tokens":  4096,
-				},
-			},
-			{
-				ID:               "glm-5.3",
-				Name:             "GLM 5.3 (Z.ai)",
-				ProviderKind:     ProviderOpenAICompatible,
-				Model:            "glm-5.3",
-				BaseURL:          "https://api.z.ai/api/paas/v4",
-				APIKeyCredential: "ZAI_API_KEY",
-				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapLongContext},
-				ContextLength:    1048576,
+				ID:               "deepseek-flash",
+				Name:             "DeepSeek V4 Flash",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "deepseek/deepseek-v4-flash-0731",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning, CapLongContext},
+				ContextLength:    1310720,
 				CostTier:         "cloud-cheap",
 				DefaultParams: map[string]any{
-					"temperature":      0.6,
-					"max_tokens":       128000,
-					"reasoning_effort": "max",
+					"temperature": 0.3,
+					"max_tokens":  8192,
 				},
 			},
+
+			// ---------- Frontier, for genuinely hard reasoning ----------
 			{
-				ID:               "claude-sonnet-5",
-				Name:             "Claude Sonnet 5",
-				ProviderKind:     ProviderAnthropic,
-				Model:            "claude-sonnet-5",
-				APIKeyCredential: "ANTHROPIC_API_KEY",
-				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
-				ContextLength:    200000,
+				// Frontier-class scores at a third of frontier price, so it is
+				// the first premium option tried.
+				ID:               "glm-5.3",
+				Name:             "GLM 5.3",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "z-ai/glm-5.3",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning, CapLongContext},
+				ContextLength:    1310720,
 				CostTier:         "cloud-premium",
 				DefaultParams: map[string]any{
-					"temperature": 0.6,
+					"temperature": 0.4,
 					"max_tokens":  8192,
 				},
 			},
 			{
+				ID:               "grok-4.6",
+				Name:             "Grok 4.6",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "x-ai/grok-4.6",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
+				ContextLength:    500000,
+				CostTier:         "cloud-premium",
+				DefaultParams: map[string]any{
+					"temperature": 0.4,
+					"max_tokens":  8192,
+				},
+			},
+			{
+				// Highest measured capability available: intelligence 63.1,
+				// coding 78. Reserved for the hardest work because of the price.
+				ID:               "claude-opus-5",
+				Name:             "Claude Opus 5",
+				ProviderKind:     ProviderOpenRouter,
+				Model:            "anthropic/claude-opus-5",
+				BaseURL:          "https://openrouter.ai/api/v1",
+				APIKeyCredential: "OPENROUTER_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning, CapVision, CapLongContext},
+				ContextLength:    1000000,
+				CostTier:         "cloud-premium",
+				DefaultParams: map[string]any{
+					"temperature": 0.4,
+					"max_tokens":  8192,
+				},
+			},
+
+			// ---------- Direct provider access ----------
+			// Kept usable through --model or /model, but deliberately absent
+			// from the stacks: routing should not depend on a second billing
+			// relationship being active.
+			{
+				ID:               "claude-sonnet-5-direct",
+				Name:             "Claude Sonnet 5 (direct)",
+				ProviderKind:     ProviderAnthropic,
+				Model:            "claude-sonnet-5",
+				APIKeyCredential: "ANTHROPIC_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
+				ContextLength:    1000000,
+				CostTier:         "cloud-premium",
+				DefaultParams: map[string]any{
+					"temperature": 0.4,
+					"max_tokens":  8192,
+				},
+			},
+			{
+				// GPT-4o costs $2.50/$10, the same class as a frontier model, so
+				// it is tiered as premium rather than cheap.
 				ID:               "openai-gpt-4o",
-				Name:             "OpenAI GPT-4o",
+				Name:             "OpenAI GPT-4o (direct)",
 				ProviderKind:     ProviderOpenAICompatible,
 				Model:            "gpt-4o",
 				APIKeyCredential: "OPENAI_API_KEY",
 				Capabilities:     []Capability{CapToolCalling, CapReasoning, CapCode, CapVision},
 				ContextLength:    128000,
-				CostTier:         "cloud-cheap",
-				DefaultParams: map[string]any{
-					"temperature": 0.6,
-					"max_tokens":  4096,
-				},
-			},
-			{
-				ID:               "openai-gpt-4o-mini",
-				Name:             "OpenAI GPT-4o Mini",
-				ProviderKind:     ProviderOpenAICompatible,
-				Model:            "gpt-4o-mini",
-				APIKeyCredential: "OPENAI_API_KEY",
-				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
-				ContextLength:    128000,
-				CostTier:         "cloud-cheap",
-				DefaultParams: map[string]any{
-					"temperature": 0.6,
-					"max_tokens":  4096,
-				},
-			},
-			{
-				ID:               "openrouter-default",
-				Name:             "OpenRouter Default",
-				ProviderKind:     ProviderOpenRouter,
-				Model:            "openai/gpt-4o-mini",
-				BaseURL:          "https://openrouter.ai/api/v1",
-				APIKeyCredential: "OPENROUTER_API_KEY",
-				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
-				ContextLength:    200000,
-				CostTier:         "cloud-cheap",
-				DefaultParams: map[string]any{
-					"temperature": 0.5,
-					"max_tokens":  4096,
-				},
-			},
-			{
-				ID:               "openrouter-fast",
-				Name:             "OpenRouter Fast",
-				ProviderKind:     ProviderOpenRouter,
-				Model:            "qwen/qwen3.7-flash",
-				BaseURL:          "https://openrouter.ai/api/v1",
-				APIKeyCredential: "OPENROUTER_API_KEY",
-				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
-				ContextLength:    1000000,
-				CostTier:         "cloud-cheap",
+				CostTier:         "cloud-premium",
 				DefaultParams: map[string]any{
 					"temperature": 0.4,
 					"max_tokens":  4096,
 				},
 			},
 			{
+				ID:               "openai-gpt-4o-mini",
+				Name:             "OpenAI GPT-4o Mini (direct)",
+				ProviderKind:     ProviderOpenAICompatible,
+				Model:            "gpt-4o-mini",
+				APIKeyCredential: "OPENAI_API_KEY",
+				Capabilities:     []Capability{CapToolCalling, CapCode},
+				ContextLength:    128000,
+				CostTier:         "cloud-cheap",
+				DefaultParams: map[string]any{
+					"temperature": 0.3,
+					"max_tokens":  4096,
+				},
+			},
+			{
+				// Zero-cost router, useful for throwaway work. Quality varies,
+				// so it is not in any stack.
 				ID:               "openrouter-free",
 				Name:             "OpenRouter Free",
 				ProviderKind:     ProviderOpenRouter,
 				Model:            "openrouter/free",
 				BaseURL:          "https://openrouter.ai/api/v1",
 				APIKeyCredential: "OPENROUTER_API_KEY",
-				Capabilities:     []Capability{CapToolCalling, CapCode, CapReasoning},
+				Capabilities:     []Capability{CapToolCalling, CapCode},
 				ContextLength:    200000,
 				CostTier:         "cloud-cheap",
 				DefaultParams: map[string]any{
-					"temperature": 0.5,
+					"temperature": 0.4,
 					"max_tokens":  4096,
 				},
 			},
 		},
+
+		// Stacks list candidates cheapest first. Routing picks by cost tier
+		// rather than position, so ordering here is documentation and a
+		// tiebreaker within a tier.
 		Stacks: []Stack{
-			{Name: "daily", Class: TaskQuickChat, Profiles: []string{"general-default", "coding-default"}},
-			{Name: "chat", Class: TaskChat, Profiles: []string{"general-default"}},
-			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "debug", Class: TaskDebug, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"coding-default", "openrouter-fast", "openrouter-default", "glm-5.3", "claude-sonnet-5"}},
-			{Name: "vision", Class: TaskVision, Profiles: []string{"vision-default", "openrouter-default", "claude-sonnet-5"}},
+			{Name: "daily", Class: TaskQuickChat, Profiles: []string{"local-coder", "qwen-flash"}},
+			{Name: "chat", Class: TaskChat, Profiles: []string{"local-coder", "glm-flash"}},
+			{Name: "code", Class: TaskCodeEdit, Profiles: []string{"local-coder", "glm-flash", "deepseek-flash", "glm-5.3", "claude-opus-5"}},
+			{Name: "debug", Class: TaskDebug, Profiles: []string{"local-coder", "glm-flash", "deepseek-flash", "glm-5.3", "claude-opus-5"}},
+			{Name: "reasoning", Class: TaskReasoning, Profiles: []string{"local-coder", "glm-flash", "glm-5.3", "grok-4.6", "claude-opus-5"}},
+			{Name: "architecture", Class: TaskArchitecture, Profiles: []string{"local-coder", "glm-flash", "glm-5.3", "grok-4.6", "claude-opus-5"}},
+			// No local vision model is installed, so vision starts at the
+			// cheapest cloud model that accepts images.
+			{Name: "vision", Class: TaskVision, Profiles: []string{"qwen-flash", "claude-opus-5"}},
 		},
 	}
 }
