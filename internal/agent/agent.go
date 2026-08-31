@@ -221,11 +221,16 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 
 			out <- Event{Type: "step", Step: fmt.Sprintf("executing %s", tc.Name), Model: profile.Name, Elapsed: time.Since(start)}
 
-			result := r.Toolkit.Execute(tools.ToolCall{
-				ID:        tc.ID,
-				Name:      tc.Name,
-				Arguments: tc.Arguments,
-			})
+			call := tools.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments}
+
+			// spawn_agents needs a model client, which the toolkit does not
+			// have, so the agent handles it.
+			var result tools.ToolResult
+			if tools.ResolveName(tc.Name) == "spawn_agents" {
+				result = r.runSpawnAgents(ctx, profile, call, out, start)
+			} else {
+				result = r.Toolkit.Execute(call)
+			}
 			out <- Event{Type: "tool_result", ToolResult: &result, Elapsed: time.Since(start)}
 
 			// Only a successful mutation makes verification worthwhile.

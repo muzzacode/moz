@@ -24,6 +24,11 @@ Navigating a codebase:
 - Use grep with include to restrict the search, for example include "*.go".
 - If a search reports that it was truncated, narrow the pattern instead of reading everything.
 
+Delegating research:
+- When a task needs several independent questions answered, use spawn_agents to investigate them in parallel. Each task must be self-contained, since sub-agents cannot see this conversation.
+- Sub-agents are read-only, so make any edits yourself once they report back.
+- Do not delegate a question you could answer with one or two tool calls.
+
 Editing files:
 4. Use write_file only to create a new file. It refuses to overwrite, so never use it on an existing file.
 5. Use edit_file to change an existing file. Include enough surrounding context that old_string appears exactly once, or set replace_all when every occurrence should change.
@@ -54,6 +59,7 @@ Available tools:
 - find_files(query, path?)
 - outline(path)
 - grep(pattern, path?, include?, ignore_case?)
+- spawn_agents(tasks)
 - web_search(query)
 - web_fetch(url)
 - exec(command)

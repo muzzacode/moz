@@ -45,6 +45,19 @@ type Toolkit struct {
 	Todos *todo.List
 	// Checkpoints, when set, receives a snapshot request before every write.
 	Checkpoints Recorder
+	// ReadOnly denies every mutating tool. Sub-agents run this way so parallel
+	// investigation can never corrupt the workspace.
+	ReadOnly bool
+}
+
+// ReadOnlyCopy returns a toolkit that shares path policy but refuses mutations.
+func (tk *Toolkit) ReadOnlyCopy() *Toolkit {
+	clone := *tk
+	clone.ReadOnly = true
+	// Snapshots are pointless when nothing can be written, and the checkpoint
+	// store is not safe for concurrent use by parallel sub-agents.
+	clone.Checkpoints = nil
+	return &clone
 }
 
 func New(safe *safepath.Policy, todos *todo.List) *Toolkit {

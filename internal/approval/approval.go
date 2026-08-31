@@ -55,7 +55,11 @@ func (p *Policy) ensureDefaults() {
 func (p *Policy) For(tool string) Level {
 	p.ensureDefaults()
 	switch tool {
-	case "read_file", "list_dir", "grep", "git_status", "git_diff", "web_search", "web_fetch", "add_todo", "list_todos", "mark_done":
+	// spawn_agents is grouped with reads because sub-agents are read-only and
+	// cannot change anything. Approval exists to gate destructive actions.
+	case "read_file", "list_dir", "grep", "find_files", "outline",
+		"git_status", "git_diff", "web_search", "web_fetch",
+		"add_todo", "list_todos", "mark_done", "spawn_agents":
 		return p.Read
 	case "write_file":
 		return p.Write

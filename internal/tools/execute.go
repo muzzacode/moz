@@ -51,6 +51,10 @@ var toolAliases = map[string]string{
 	"search_web":     "web_search",
 	"web_fetch":      "web_fetch",
 	"fetch_url":      "web_fetch",
+	"spawn_agents":   "spawn_agents",
+	"spawn_agent":    "spawn_agents",
+	"run_subagents":  "spawn_agents",
+	"subagents":      "spawn_agents",
 	"add_todo":       "add_todo",
 	"list_todos":     "list_todos",
 	"mark_done":      "mark_done",
@@ -76,6 +80,9 @@ func renderSearch(res *index.SearchResult) string {
 	return b.String()
 }
 
+// ResolveName maps an alias to its canonical tool name.
+func ResolveName(name string) string { return resolveToolName(name) }
+
 func resolveToolName(name string) string {
 	if n, ok := toolAliases[strings.ToLower(strings.TrimSpace(name))]; ok {
 		return n
@@ -86,6 +93,13 @@ func resolveToolName(name string) string {
 func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 	call.Name = resolveToolName(call.Name)
 	tr := ToolResult{ID: call.ID, Name: call.Name}
+
+	// Enforced here rather than at the call sites so a read-only toolkit cannot
+	// be bypassed by any caller.
+	if tk.ReadOnly && mutatingTools[call.Name] {
+		tr.Error = fmt.Sprintf("%s is not available: this agent is read-only and cannot modify anything", call.Name)
+		return tr
+	}
 
 	switch call.Name {
 	case "read_file":
@@ -328,6 +342,11 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 		res := tk.GitDiff(args.CWD)
 		data, _ := json.MarshalIndent(res, "", "  ")
 		tr.Content = string(data)
+
+	case "spawn_agents":
+		// Handled by the agent, which owns the model client. Reaching here means
+		// the interception was bypassed.
+		tr.Error = "spawn_agents must be handled by the agent runner"
 
 	default:
 		tr.Error = fmt.Sprintf("unknown tool: %s", call.Name)

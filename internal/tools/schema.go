@@ -8,6 +8,43 @@ type Definition struct {
 }
 
 // Definitions returns the tools Moz can use.
+// mutatingTools can change the workspace or the outside world. They are denied
+// to read-only toolkits, which is what sub-agents run with.
+//
+// exec is included because it can do anything, and git_commit because it alters
+// history. Sub-agents exist to investigate in parallel; letting several of them
+// write concurrently invites corrupted files and unreviewable changes.
+var mutatingTools = map[string]bool{
+	"write_file": true,
+	"edit_file":  true,
+	"exec":       true,
+	"git_commit": true,
+	"git_push":   true,
+	"git_pull":   true,
+	// Todos are shared parent state, so sub-agents must not rewrite the plan.
+	"add_todo":  true,
+	"mark_done": true,
+	// Nested spawning would allow unbounded fan-out.
+	"spawn_agents": true,
+}
+
+// IsMutating reports whether a tool is denied in read-only mode.
+func IsMutating(name string) bool {
+	return mutatingTools[resolveToolName(name)]
+}
+
+// ReadOnlyDefinitions returns the tools a sub-agent may call.
+func ReadOnlyDefinitions() []Definition {
+	all := Definitions()
+	out := make([]Definition, 0, len(all))
+	for _, d := range all {
+		if !mutatingTools[d.Name] {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func Definitions() []Definition {
 	return []Definition{
 		{
@@ -35,6 +72,21 @@ func Definitions() []Definition {
 						"description": "Directory path to list. Defaults to current directory.",
 					},
 				},
+			},
+		},
+		{
+			Name:        "spawn_agents",
+			Description: "Run up to 6 independent read-only investigations in parallel and get back their findings. Use this when a task needs several separate questions answered, for example understanding three unrelated subsystems. Each sub-agent has its own context, so this keeps large amounts of reading out of your conversation. Sub-agents cannot modify anything, so do the editing yourself afterwards. Do not use this for a single question you could answer with one or two tool calls.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"tasks": map[string]interface{}{
+						"type":        "array",
+						"description": "Self-contained questions. Each must include the context needed to answer it, because sub-agents cannot see your conversation.",
+						"items":       map[string]string{"type": "string"},
+					},
+				},
+				"required": []string{"tasks"},
 			},
 		},
 		{
