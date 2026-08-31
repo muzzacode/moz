@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/muzzacode/moz/internal/approval"
 	"github.com/muzzacode/moz/internal/diff"
 	"github.com/muzzacode/moz/internal/llm"
 )
@@ -24,7 +25,13 @@ func (m *Model) describeToolCall(tc *llm.ToolCall) string {
 			Command string `json:"command"`
 		}
 		if err := json.Unmarshal(tc.Arguments, &args); err == nil && args.Command != "" {
-			return "run: " + args.Command
+			desc := "run: " + args.Command
+			// Say plainly when a command reaches outside the project, since that
+			// is the difference between changing the repo and changing the machine.
+			if risk, flagged := approval.ClassifyCommand(args.Command); flagged {
+				desc += fmt.Sprintf("\n  ⚠ outside this project: %s (%s)", risk.Reason, risk.Detail)
+			}
+			return desc
 		}
 	}
 	return fmt.Sprintf("%s(%s)", tc.Name, truncate(string(tc.Arguments), 400))

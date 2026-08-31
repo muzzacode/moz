@@ -105,6 +105,7 @@ When the agent is on, Moz decides when to call tools. It can also `web_search` v
 - **Automatic retries.** Rate limits and transient provider failures are retried with exponential backoff and jitter instead of losing the task.
 - **Repository-aware search.** `find_files` locates files by name or glob, `outline` lists a file's declarations so a large file can be understood without reading it, and `grep` skips ignored directories and binary files with capped results. On an 18,000-file repo this avoids scanning the 97% that lives in `.git`, `node_modules`, and `target`.
 - **Project instructions.** If the repo has an `AGENTS.md` (or `.mozrules`, `CLAUDE.md`, `.cursorrules`, `CONVENTIONS.md`), Moz loads it and follows it in preference to its own defaults.
+- **Commands that leave the project are flagged.** File tools are sandboxed to the workspace, but `exec` runs a real shell. Commands touching system directories, installing global packages, editing shell config, or force-pushing are called out in the approval prompt, and refused outright under `--yes` where nobody is there to ask.
 - **Parallel sub-agents.** For tasks needing several independent questions answered, the agent can run up to 6 investigations in parallel (3 at a time). Each sub-agent has its own context, so large amounts of reading never reach the main conversation. Sub-agents are **read-only by design**: several agents writing at once would corrupt files, and parallel approval prompts are unusable in a terminal.
 
 ### Modes

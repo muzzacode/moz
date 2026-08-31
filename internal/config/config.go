@@ -76,7 +76,10 @@ func Default() *Config {
 		// optional extra allowed root, not the active project.
 		Workspace: "",
 		Approval:  approval.Default(),
-		Agent:     false,
+		// On by default. Moz is a coding tool, and without tools it cannot read
+		// the repository it was launched in, so questions about "this project"
+		// get answered from training data. Writes still require approval.
+		Agent: true,
 		AgentOpts: AgentOpts{
 			MaxTurns:              DefaultMaxTurns,
 			RequestTimeoutSeconds: DefaultRequestTimeout,

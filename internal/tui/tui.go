@@ -24,6 +24,7 @@ import (
 	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/project"
 	"github.com/muzzacode/moz/internal/safepath"
 	"github.com/muzzacode/moz/internal/todo"
 	"github.com/muzzacode/moz/internal/tools"
@@ -48,6 +49,10 @@ type Model struct {
 	todoStore   *todo.Store
 	checkpoints *checkpoint.Store
 	budget      *adaptive.Budget
+	// cwd and instructions ground the model in the current project, including
+	// in chat mode where it has no tools to discover them itself.
+	cwd          string
+	instructions *project.Instructions
 
 	profile      *models.Profile
 	mode         string
@@ -156,6 +161,10 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	checkpoints := checkpoint.New()
 	toolkit.Checkpoints = checkpoints
 
+	// Load the project's instruction file once at startup so both chat and agent
+	// mode are grounded in it.
+	instructions, _ := project.Load(cwd)
+
 	profile, err := registry.Find(cfg.DefaultModel)
 	if err != nil {
 		profile = &registry.Profiles[0]
@@ -193,6 +202,8 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 		toolkit:      toolkit,
 		checkpoints:  checkpoints,
 		budget:       budget,
+		cwd:          cwd,
+		instructions: instructions,
 		todos:        todos,
 		todoStore:    todoStore,
 		profile:      profile,
@@ -205,6 +216,22 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 }
 
 func (m Model) Init() tea.Cmd {
+	// State the working directory, tool status, and any project file up front.
+	// Otherwise there is no way to tell whether an answer was grounded in the
+	// repository or invented.
+	var b strings.Builder
+	fmt.Fprintf(&b, "Moz %s in %s", version.Version, m.cwd)
+	if m.agentEnabled {
+		b.WriteString("\nTools: on")
+	} else {
+		b.WriteString("\nTools: off — cannot read files. Enable with /agent on")
+	}
+	if m.instructions != nil {
+		fmt.Fprintf(&b, "\nProject instructions: %s", m.instructions.Source)
+	}
+	m.addSystem(b.String())
+	m.updateViewport()
+
 	return tea.Batch(
 		textarea.Blink,
 		tea.EnterAltScreen,
@@ -1015,6 +1042,23 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	return m, m.agentWait()
 }
 
+// prependSystem returns msgs with a system prompt in front, replacing any
+// system message the history already starts with so prompts cannot stack up
+// across turns.
+func prependSystem(msgs []memory.Message, prompt string) []memory.Message {
+	out := make([]memory.Message, 0, len(msgs)+1)
+	out = append(out, memory.Message{Role: "system", Content: prompt, Timestamp: time.Now().UTC()})
+	for _, m := range msgs {
+		// Session history holds UI notices as system messages; those are not
+		// operating instructions and would confuse the model, so drop them.
+		if m.Role == "system" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // drain consumes a cancelled agent's remaining events so its goroutine can
 // reach its deferred close instead of blocking on an unread channel. Approvals
 // are auto-denied because no user is watching any more.
@@ -1055,8 +1099,14 @@ func (m *Model) startStream() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
+	// Chat mode has no tools, so the model must be told where it is and that it
+	// cannot read anything. Without this it answers questions about "this
+	// project" from training data and invents a plausible-sounding other project
+	// with the same name.
+	msgs := prependSystem(m.session.Messages, agent.BuildChatPrompt(m.cwd, m.instructions))
+
 	client := llm.New(m.profile, m.creds).WithTimeout(m.cfg.RequestTimeout())
-	go client.ChatStream(ctx, m.session.Messages, ch)
+	go client.ChatStream(ctx, msgs, ch)
 
 	return waitForStream(ch)
 }

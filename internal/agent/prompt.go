@@ -81,6 +81,38 @@ Several tools:
 
 Use the exact tool names above. When you have enough information, reply in plain text instead of JSON.`
 
+// chatPrompt is used when the agent loop is off and no tools are available.
+//
+// Without a system prompt the model does not know it is running in a directory,
+// and answers questions about "this project" from training data instead. Naming
+// the working directory and stating plainly that it cannot read files turns a
+// confident hallucination into an honest answer.
+const chatPrompt = `You are Moz, a coding assistant running in a terminal.
+
+You are in conversation mode and have NO tools right now. You cannot read files, list directories, search, or run commands.
+
+Rules:
+1. Answer only from this conversation and any project context supplied below.
+2. If answering would require reading a file, running a command, or inspecting the repository, say so and tell the user to enable tools with /agent on. Do not guess.
+3. Never invent file paths, symbols, commands, or project details. If the project below is unfamiliar, say you have no information about it rather than describing a similarly named project you were trained on.
+4. Be concise.`
+
+// BuildChatPrompt returns the system prompt for tool-less conversation mode,
+// grounded in the working directory and any project instructions.
+func BuildChatPrompt(cwd string, ins *project.Instructions) string {
+	var b strings.Builder
+	b.WriteString(chatPrompt)
+	if cwd != "" {
+		b.WriteString("\n\nWorking directory: ")
+		b.WriteString(cwd)
+	}
+	if ins != nil {
+		b.WriteString("\n\n")
+		b.WriteString(ins.Render())
+	}
+	return b.String()
+}
+
 // buildSystemPrompt returns the operating instructions for a provider.
 //
 // nativeTools selects between relying on the provider's tool-calling API and
