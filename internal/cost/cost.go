@@ -40,6 +40,27 @@ var knownPrices = map[string]Price{
 	"openrouter-free": {Input: 0, Output: 0},
 }
 
+// PriceFor returns the published price for a profile.
+//
+// Exposed so the UI can show what a model costs at the moment of choosing it,
+// which is when the information actually changes a decision.
+func PriceFor(profileID string) (Price, bool) {
+	p, ok := knownPrices[profileID]
+	return p, ok
+}
+
+// Describe renders a profile's price compactly, e.g. "$0.08/$0.25 per 1M".
+func Describe(profileID string) string {
+	p, ok := knownPrices[profileID]
+	if !ok {
+		return "price unknown"
+	}
+	if p.Input == 0 && p.Output == 0 {
+		return "free"
+	}
+	return fmt.Sprintf("$%.3g/$%.3g per 1M", p.Input, p.Output)
+}
+
 func Estimate(profileID string, u openai.Usage) float64 {
 	p, ok := knownPrices[profileID]
 	if !ok {

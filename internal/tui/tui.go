@@ -72,6 +72,9 @@ type Model struct {
 	onConfirmYes func() tea.Cmd
 	onConfirmNo  func() tea.Cmd
 
+	// modelPicker is the keyboard-driven model chooser opened by /models.
+	modelPicker picker
+
 	// Agent loop.
 	agentEnabled  bool
 	agentOut      chan agent.Event
@@ -250,7 +253,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		m.updateViewport()
 
+	case tea.MouseMsg:
+		// The conversation is the primary content, so the wheel scrolls it
+		// without needing to move focus away from the input.
+		m.viewport, _ = m.viewport.Update(msg)
+		return m, nil
+
 	case tea.KeyMsg:
+		// The picker is modal: it owns the keyboard while open, so navigation
+		// keys do not leak into the text input.
+		if m.modelPicker.active {
+			return m.handlePickerKey(msg)
+		}
+
+		// Scrolling is checked before the textarea sees the key, otherwise every
+		// keystroke is swallowed by the input and the history cannot be read.
+		if handled, cmd := m.handleScrollKey(msg); handled {
+			return m, cmd
+		}
+
 		if m.confirming {
 			switch msg.Type {
 			case tea.KeyCtrlC, tea.KeyEsc:
@@ -686,7 +707,14 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		})
 
 	case "/models":
-		m.addSystem(m.renderModels())
+		// A plain list still has a use when piping or reading back, so keep it
+		// behind an explicit argument.
+		if len(args) > 0 && (args[0] == "list" || args[0] == "-l") {
+			m.addSystem(m.renderModels())
+			return m, nil
+		}
+		m.modelPicker = newModelPicker(m.registry, m.router, m.profile.ID)
+		m.updateViewport()
 		return m, nil
 
 	case "/set":
@@ -1165,6 +1193,11 @@ func (m *Model) updateViewport() {
 		b.WriteString(formatMessage(memory.Message{Role: "assistant", Content: m.pending, Model: m.profile.Name, Timestamp: time.Now().UTC()}))
 		b.WriteString("▌")
 	}
+	if m.modelPicker.active {
+		b.WriteString("\n")
+		b.WriteString(m.modelPicker.View())
+		b.WriteString("\n")
+	}
 	if m.confirming {
 		b.WriteString("\n")
 		b.WriteString(warnStyle.Render(m.confirmText))
@@ -1175,8 +1208,14 @@ func (m *Model) updateViewport() {
 		b.WriteString(errorStyle.Render(m.errMsg))
 		b.WriteString("\n")
 	}
+	// Follow new output only when already at the bottom. Otherwise scrolling back
+	// to read something would be undone by the next streamed token.
+	stick := m.viewport.AtBottom()
 	m.viewport.SetContent(b.String())
-	m.viewport.GotoBottom()
+	if stick || m.modelPicker.active || m.confirming {
+		// A prompt or picker must be visible even if the user had scrolled away.
+		m.viewport.GotoBottom()
+	}
 }
 
 func formatMessage(m memory.Message) string {
@@ -1256,6 +1295,7 @@ func Run(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	// Mouse cell motion enables wheel scrolling of the conversation.
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }

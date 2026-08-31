@@ -69,8 +69,9 @@ moz completion zsh > "${fpath[1]}/_moz"  # zsh
 In the TUI:
 
 - Type a message and press `Enter` to chat.
+- Scroll history with the mouse wheel, `PgUp`/`PgDn`, `Shift+↑`/`Shift+↓`, `Ctrl+U`/`Ctrl+D`, or `Home`/`End`. Scrolling back pauses auto-follow until you return to the bottom.
 - `Shift+Enter` — insert a newline.
-- `/models` — list profiles and API key availability.
+- `/models` — interactive model picker: arrow keys to move, enter to select, esc to cancel. Shows tier, price, and whether a key is present. `/models list` prints a plain list instead.
 - `/mode adaptive` — let Moz pick the model per task.
 - `/mode manual` — lock the current model.
 - `/mode <profile-id>` or `/model <id>` — switch model manually.
