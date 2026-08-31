@@ -7,6 +7,28 @@ import (
 	"github.com/muzzacode/moz/internal/config"
 )
 
+// Session IDs are filenames. Two sessions created in quick succession must not
+// collide, or starting a new session would overwrite the previous one on disk.
+func TestNewSessionIDsAreUniqueInTightLoop(t *testing.T) {
+	seen := make(map[string]bool, 1000)
+	for i := 0; i < 1000; i++ {
+		id := NewSession().ID
+		if seen[id] {
+			t.Fatalf("duplicate session ID after %d iterations: %s", i, id)
+		}
+		seen[id] = true
+	}
+}
+
+// IDs are also used for newest-first ordering, so the timestamp prefix must
+// stay lexicographically sortable.
+func TestNewSessionIDStartsWithSortableTimestamp(t *testing.T) {
+	id := NewSession().ID
+	if len(id) < 15 || id[8] != 'T' {
+		t.Fatalf("unexpected ID shape: %s", id)
+	}
+}
+
 func TestSessionInfosAndLatest(t *testing.T) {
 	cfg := config.Default()
 	cfg.MemoryDir = t.TempDir()

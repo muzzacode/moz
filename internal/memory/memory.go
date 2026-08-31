@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -153,10 +155,25 @@ func (s *Store) Summary() string {
 	return fmt.Sprintf("memory dir: %s | sessions: %d", s.dir(), len(sessions))
 }
 
+// NewSession creates an empty session with a sortable, collision-resistant ID.
+//
+// The ID must be unique even for two sessions created in the same millisecond,
+// otherwise starting a new session immediately after another would overwrite the
+// earlier session file on disk and lose the conversation.
 func NewSession() *Session {
 	now := time.Now().UTC()
 	return &Session{
-		ID:      fmt.Sprintf("%s-%d", now.Format("20060102T150405"), now.Nanosecond()/1e6),
+		ID:      fmt.Sprintf("%s-%09d-%s", now.Format("20060102T150405"), now.Nanosecond(), randomSuffix()),
 		Started: now,
 	}
+}
+
+// randomSuffix guards against collisions when the clock is coarse or two
+// sessions are created in the same nanosecond tick.
+func randomSuffix() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "0000"
+	}
+	return hex.EncodeToString(b[:])
 }

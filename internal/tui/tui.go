@@ -876,14 +876,20 @@ func (m *Model) startAgent(input string) tea.Cmd {
 	return m.agentWait()
 }
 
+// agentWait returns a command that blocks for the next agent event.
+//
+// The channel is captured when the command is built, not read inside the
+// closure. Bubble Tea runs commands on their own goroutines, so touching
+// m.agentOut in there would race with abort clearing it. For the same reason
+// the closure never mutates model state; only Update may do that.
 func (m *Model) agentWait() tea.Cmd {
+	ch := m.agentOut
+	if ch == nil {
+		return func() tea.Msg { return agent.Event{Type: "done"} }
+	}
 	return func() tea.Msg {
-		if m.agentOut == nil {
-			return agent.Event{Type: "done"}
-		}
-		ev, ok := <-m.agentOut
+		ev, ok := <-ch
 		if !ok {
-			m.agentOut = nil
 			return agent.Event{Type: "done"}
 		}
 		return ev
