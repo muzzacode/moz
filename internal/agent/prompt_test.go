@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -98,5 +99,29 @@ func TestSupportsNativeToolsByProvider(t *testing.T) {
 		if got := p.SupportsNativeTools(); got != tc.want {
 			t.Fatalf("%s caps=%v: got %v want %v", tc.kind, tc.caps, got, tc.want)
 		}
+	}
+}
+
+// A model that fails and gets swapped must report why, or a broken key is
+// indistinguishable from a broken request.
+func TestShortErrExtractsProviderMessage(t *testing.T) {
+	err := fmt.Errorf(`chat request failed: error, status code: 402, status: 402 Payment Required, body: {"error":{"message":"This request requires more credits, or fewer max_tokens.","code":402}}`)
+	got := shortErr(err)
+	if !strings.Contains(got, "more credits") {
+		t.Fatalf("expected the provider message to survive, got %q", got)
+	}
+	if strings.Contains(got, `"code"`) {
+		t.Fatalf("expected the JSON envelope to be stripped, got %q", got)
+	}
+}
+
+func TestShortErrCollapsesAndTruncates(t *testing.T) {
+	got := shortErr(fmt.Errorf("a\n\nb   c"))
+	if got != "a b c" {
+		t.Fatalf("expected whitespace collapsed, got %q", got)
+	}
+	long := shortErr(fmt.Errorf("%s", strings.Repeat("x", 500)))
+	if len(long) > 200 {
+		t.Fatalf("expected truncation, got %d chars", len(long))
 	}
 }

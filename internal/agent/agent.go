@@ -236,7 +236,10 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 			// Retries inside the client are already exhausted, so this model is
 			// not going to succeed. Another one might, at any tier: the failure
 			// may be the provider rather than the model's ability.
-			if tryRecover("model failed") {
+			//
+			// The cause is carried into the message: silently swapping models
+			// leaves no way to tell a broken key from a broken request.
+			if tryRecover(fmt.Sprintf("failed (%s)", shortErr(err))) {
 				continue
 			}
 			out <- Event{Type: "error", Error: err.Error(), Elapsed: time.Since(start)}
@@ -377,6 +380,24 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 // maxStalls is how many consecutive empty replies are tolerated before the model
 // is considered incapable of following the protocol.
 const maxStalls = 2
+
+// shortErr condenses a provider error for a one-line status message, keeping the
+// part that identifies the cause.
+func shortErr(err error) string {
+	s := strings.Join(strings.Fields(err.Error()), " ")
+	// Provider errors often wrap a JSON body; the message field is the useful part.
+	if i := strings.Index(s, `"message":"`); i >= 0 {
+		rest := s[i+len(`"message":"`):]
+		if j := strings.Index(rest, `"`); j > 0 {
+			s = rest[:j]
+		}
+	}
+	const max = 160
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
 
 // classOf classifies a task so escalation searches the right stack.
 func classOf(task string) models.TaskClass {
