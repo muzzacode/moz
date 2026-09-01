@@ -68,8 +68,8 @@ moz completion zsh > "${fpath[1]}/_moz"  # zsh
 
 In the TUI:
 
-- Type a message and press `Enter` to chat.
-- Scroll history with the mouse wheel, `PgUp`/`PgDn`, `Shift+↑`/`Shift+↓`, `Ctrl+U`/`Ctrl+D`, or `Home`/`End`. Scrolling back pauses auto-follow until you return to the bottom.
+- Type a message and press `Enter` to chat. The prompt is multi-line and scrolls; pasting more than 20 lines collapses to `[#1 pasted N lines]` and is still sent in full.
+- Scroll history with `PgUp`/`PgDn`, `Shift+↑`/`Shift+↓`, `Ctrl+U`/`Ctrl+D`, or `Home`/`End`. Scrolling back pauses auto-follow until you return to the bottom. `/mouse` enables wheel scrolling, at the cost of the terminal's own text selection.
 - `Shift+Enter` — insert a newline.
 - `/models` — interactive model picker: arrow keys to move, enter to select, esc to cancel. Shows tier, price, and whether a key is present. `/models list` prints a plain list instead.
 - `/mode adaptive` — let Moz pick the model per task.

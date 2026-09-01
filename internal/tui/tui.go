@@ -74,6 +74,11 @@ type Model struct {
 
 	// modelPicker is the keyboard-driven model chooser opened by /models.
 	modelPicker picker
+	// pastes holds large pasted blocks that are collapsed in the prompt.
+	pastes pasteStore
+	// mouseEnabled captures the wheel for scrolling, at the cost of the
+	// terminal's own text selection.
+	mouseEnabled bool
 
 	// Agent loop.
 	agentEnabled  bool
@@ -86,6 +91,9 @@ type Model struct {
 	// cancel aborts the in-flight agent task or stream. Non-nil only while a
 	// task is running.
 	cancel context.CancelFunc
+	// lastEvent is when the running task last showed signs of life, used to
+	// detect a hung task.
+	lastEvent time.Time
 }
 
 // busy reports whether a model request or agent task is in flight.
@@ -181,9 +189,15 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	ta := textarea.New()
 	ta.Placeholder = "Type a message, or /help for commands"
 	ta.SetWidth(80)
-	ta.SetHeight(1)
+	// Multi-line by default. A single line makes it impossible to review a long
+	// prompt before sending, and pasted text scrolls out of sight.
+	ta.SetHeight(promptHeight)
 	ta.ShowLineNumbers = false
-	ta.Prompt = ""
+	// A marker makes it obvious where input begins, and which lines are part of
+	// the same prompt once it wraps.
+	ta.Prompt = promptMarker
+	ta.CharLimit = 0
+	ta.MaxHeight = promptMaxHeight
 	ta.KeyMap.InsertNewline = shiftEnterBinding
 	ta.Focus()
 
@@ -215,6 +229,7 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 		textarea:     ta,
 		viewport:     vp,
 		streamChan:   make(chan llm.StreamEvent),
+		pastes:       newPasteStore(),
 	}, nil
 }
 
@@ -238,6 +253,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		tea.EnterAltScreen,
+		watchdog(),
 	)
 }
 
@@ -249,7 +265,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 4
 		m.textarea.SetWidth(msg.Width)
-		m.textarea.SetHeight(3)
+		m.textarea.SetHeight(promptHeight)
 		m.ready = true
 		m.updateViewport()
 
@@ -270,6 +286,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// keystroke is swallowed by the input and the history cannot be read.
 		if handled, cmd := m.handleScrollKey(msg); handled {
 			return m, cmd
+		}
+
+		// A large paste is collapsed to a placeholder before it reaches the
+		// input, so it cannot bury the prompt.
+		if msg.Paste {
+			if handled := m.handlePaste(string(msg.Runes)); handled {
+				m.updateViewport()
+				return m, nil
+			}
 		}
 
 		if m.confirming {
@@ -313,10 +338,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
 
+	case watchdogTick:
+		return m.handleWatchdog()
+
 	case llm.StreamEvent:
+		m.noteActivity()
 		return m.handleStreamEvent(msg)
 
 	case agent.Event:
+		m.noteActivity()
 		return m.handleAgentEvent(msg)
 
 	case errMsg:
@@ -329,8 +359,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 type errMsg string
 
 func (m *Model) submitInput() (tea.Model, tea.Cmd) {
-	input := strings.TrimSpace(m.textarea.Value())
+	input := strings.TrimSpace(m.pastes.expand(m.textarea.Value()))
 	m.textarea.Reset()
+	m.pastes.reset()
 	m.textarea.Blur()
 	m.textarea.Focus()
 
@@ -338,8 +369,8 @@ func (m *Model) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.streaming {
-		m.errMsg = "wait for the current response to finish"
+	if m.busy() {
+		m.errMsg = "a task is running — press esc to interrupt it"
 		return m, nil
 	}
 
@@ -706,6 +737,17 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			return nil
 		})
 
+	case "/mouse":
+		m.mouseEnabled = !m.mouseEnabled
+		if m.mouseEnabled {
+			m.addSystem("Mouse wheel scrolling on. Terminal text selection is disabled while this is active; run /mouse again to restore it.")
+			m.updateViewport()
+			return m, tea.EnableMouseCellMotion
+		}
+		m.addSystem("Mouse capture off. Text selection restored; scroll with PgUp/PgDn, Shift+arrows or Home/End.")
+		m.updateViewport()
+		return m, tea.DisableMouse
+
 	case "/models":
 		// A plain list still has a use when piping or reading back, so keep it
 		// behind an explicit argument.
@@ -917,6 +959,7 @@ func (m *Model) startAgent(input string) tea.Cmd {
 
 	m.agentOut = make(chan agent.Event)
 	m.agentApproval = make(chan bool)
+	m.noteActivity()
 
 	cfg := m.cfg
 	reg := m.registry
@@ -1031,21 +1074,20 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, m.agentWait()
 
+	case "message_end":
+		// The model narrated before doing more work. Commit it now so it is not
+		// merged into whatever the next turn produces.
+		m.commitPending()
+		m.updateViewport()
+		return m, m.agentWait()
+
 	case "usage":
 		m.updateViewport()
 		return m, m.agentWait()
 
 	case "done":
 		m.finishTask()
-		if m.pending != "" {
-			m.session.Messages = append(m.session.Messages, memory.Message{
-				Role:      "assistant",
-				Content:   m.pending,
-				Model:     m.profile.Name,
-				Timestamp: time.Now().UTC(),
-			})
-			m.pending = ""
-		}
+		m.commitPending()
 		m.saveSession()
 		m.updateViewport()
 		return m, nil
@@ -1102,6 +1144,20 @@ func drain(events <-chan agent.Event, approvals chan bool) {
 	}
 }
 
+// commitPending moves streamed text into the conversation history.
+func (m *Model) commitPending() {
+	if m.pending == "" {
+		return
+	}
+	m.session.Messages = append(m.session.Messages, memory.Message{
+		Role:      "assistant",
+		Content:   m.pending,
+		Model:     m.profile.Name,
+		Timestamp: time.Now().UTC(),
+	})
+	m.pending = ""
+}
+
 // finishTask clears in-flight task state and releases the cancel function.
 func (m *Model) finishTask() {
 	m.streaming = false
@@ -1123,6 +1179,7 @@ func (m *Model) startStream() tea.Cmd {
 
 	ch := make(chan llm.StreamEvent)
 	m.streamChan = ch
+	m.noteActivity()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -1186,11 +1243,11 @@ func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 func (m *Model) updateViewport() {
 	var b strings.Builder
 	for _, msg := range m.session.Messages {
-		b.WriteString(formatMessage(msg))
+		b.WriteString(formatMessage(msg, m.viewport.Width))
 		b.WriteString("\n\n")
 	}
 	if m.streaming && m.pending != "" {
-		b.WriteString(formatMessage(memory.Message{Role: "assistant", Content: m.pending, Model: m.profile.Name, Timestamp: time.Now().UTC()}))
+		b.WriteString(formatMessage(memory.Message{Role: "assistant", Content: m.pending, Model: m.profile.Name, Timestamp: time.Now().UTC()}, m.viewport.Width))
 		b.WriteString("▌")
 	}
 	if m.modelPicker.active {
@@ -1218,21 +1275,83 @@ func (m *Model) updateViewport() {
 	}
 }
 
-func formatMessage(m memory.Message) string {
+// formatMessage renders one message, wrapped to width.
+//
+// The viewport truncates rather than wraps, so anything past the right edge is
+// lost from the display entirely. Wrapping has to happen before the content is
+// handed over.
+func formatMessage(m memory.Message, width int) string {
+	body := wrapText(m.Content, width)
 	switch m.Role {
 	case "user":
-		return userStyle.Render("You") + "\n" + m.Content
+		return userStyle.Render("You") + "\n" + body
 	case "assistant":
 		header := assistantStyle.Render("Moz")
 		if m.Model != "" {
 			header = assistantStyle.Render("Moz") + systemStyle.Render(" ("+m.Model+")")
 		}
-		return header + "\n" + m.Content
+		return header + "\n" + body
 	case "system":
-		return infoStyle.Render(m.Content)
+		return infoStyle.Render(body)
 	default:
-		return m.Content
+		return body
 	}
+}
+
+// wrapText word-wraps to width, leaving indented lines alone.
+//
+// Code and diffs rely on their leading whitespace, and reflowing them makes them
+// unreadable, so only ordinary prose paragraphs are wrapped.
+func wrapText(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	// Leave a column free: some terminals wrap early at the exact edge.
+	limit := width - 1
+	if limit < 20 {
+		limit = 20
+	}
+
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if len(line) <= limit || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, wrapLine(line, limit)...)
+	}
+	return strings.Join(out, "\n")
+}
+
+// wrapLine breaks a single long line on word boundaries.
+func wrapLine(line string, limit int) []string {
+	var out []string
+	var cur strings.Builder
+
+	for _, word := range strings.Fields(line) {
+		switch {
+		case cur.Len() == 0:
+			cur.WriteString(word)
+		case cur.Len()+1+len(word) <= limit:
+			cur.WriteByte(' ')
+			cur.WriteString(word)
+		default:
+			out = append(out, cur.String())
+			cur.Reset()
+			cur.WriteString(word)
+		}
+		// A single word longer than the limit still has to be broken somewhere.
+		for cur.Len() > limit {
+			s := cur.String()
+			out = append(out, s[:limit])
+			cur.Reset()
+			cur.WriteString(s[limit:])
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 func (m *Model) saveSession() {
@@ -1295,7 +1414,10 @@ func Run(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	if err != nil {
 		return err
 	}
-	// Mouse cell motion enables wheel scrolling of the conversation.
-	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	// Mouse capture is deliberately off: enabling it takes over the terminal's
+	// own click-and-drag selection, which breaks copying text out of the
+	// conversation. Keyboard scrolling covers the same need, and /mouse turns
+	// wheel scrolling on for anyone who prefers it.
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }

@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muzzacode/moz/internal/agent"
 	"github.com/muzzacode/moz/internal/memory"
 )
 
@@ -122,5 +125,89 @@ func TestMouseWheelScrollsHistory(t *testing.T) {
 	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	if asModel(t, updated).viewport.AtBottom() {
 		t.Fatal("wheel up should scroll the history")
+	}
+}
+
+// A hung task must become recoverable on its own, otherwise the input refuses
+// new messages with no way back.
+func TestWatchdogClearsAStalledTask(t *testing.T) {
+	m := newTestModel(t)
+	_, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	m.streaming = true
+	m.lastEvent = time.Now().Add(-2 * stallTimeout)
+
+	updated, _ := m.handleWatchdog()
+	got := asModel(t, updated)
+
+	if got.busy() {
+		t.Fatal("watchdog should have cleared the stalled task")
+	}
+	if !strings.Contains(systemText(got)+got.errMsg, "abandoned") {
+		t.Fatalf("expected an explanation, got %q / %q", systemText(got), got.errMsg)
+	}
+}
+
+// Normal slow work must not be killed.
+func TestWatchdogLeavesAnActiveTaskAlone(t *testing.T) {
+	m := newTestModel(t)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancel = cancel
+	m.streaming = true
+	m.lastEvent = time.Now()
+
+	updated, _ := m.handleWatchdog()
+	if !asModel(t, updated).busy() {
+		t.Fatal("an active task must not be cancelled")
+	}
+}
+
+// Waiting on an approval is not a stall.
+func TestWatchdogDoesNotKillWhileAwaitingApproval(t *testing.T) {
+	m := newTestModel(t)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancel = cancel
+	m.streaming = true
+	m.confirming = true
+	m.lastEvent = time.Now().Add(-2 * stallTimeout)
+
+	updated, _ := m.handleWatchdog()
+	if !asModel(t, updated).busy() {
+		t.Fatal("an approval prompt is waiting on the user, not stalled")
+	}
+}
+
+// Streamed narration before a tool call must be committed, not merged into the
+// next turn's output.
+func TestMessageEndCommitsStreamedText(t *testing.T) {
+	m := newTestModel(t)
+	m.pending = "Let me check that file."
+
+	updated, _ := m.handleAgentEvent(agent.Event{Type: "message_end"})
+	got := asModel(t, updated)
+
+	if got.pending != "" {
+		t.Fatalf("pending should be flushed, got %q", got.pending)
+	}
+	last := got.session.Messages[len(got.session.Messages)-1]
+	if last.Role != "assistant" || last.Content != "Let me check that file." {
+		t.Fatalf("expected the text committed as an assistant message, got %+v", last)
+	}
+}
+
+// Submitting while busy must point at the way out.
+func TestBusyMessageMentionsEsc(t *testing.T) {
+	m := newTestModel(t)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancel = cancel
+	m.streaming = true
+	m.textarea.SetValue("hello")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := asModel(t, updated); !strings.Contains(got.errMsg, "esc") {
+		t.Fatalf("expected the message to mention esc, got %q", got.errMsg)
 	}
 }

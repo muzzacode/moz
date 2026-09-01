@@ -227,7 +227,16 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 
 		out <- Event{Type: "step", Step: fmt.Sprintf("turn %d/%d: reasoning", turn+1, maxTurns), Model: profile.Name, Elapsed: time.Since(start)}
 
-		resp, err := client.Chat(ctx, messages, toolDefs)
+		// One streamed request per turn. Text reaches the user as it arrives, and
+		// any tool calls are reassembled from the same stream, so there is no
+		// second request duplicating the cost and the wait.
+		streamed, err := client.ChatStreamTools(ctx, messages, toolDefs, func(chunk string) {
+			out <- Event{Type: "message", Content: chunk, Model: profile.Name, Elapsed: time.Since(start)}
+		})
+		resp := (*llm.ChatResponse)(nil)
+		if streamed != nil {
+			resp = &llm.ChatResponse{Content: streamed.Content, ToolCalls: streamed.ToolCalls, Usage: streamed.Usage}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				out <- Event{Type: "cancelled", Step: "cancelled", Elapsed: time.Since(start)}
@@ -274,6 +283,16 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 			// project's own verification and hand back any failure so it can
 			// fix the problem rather than reporting false success.
 			if feedback, ok := r.runVerification(ctx, &verifyState, out, start, profile); ok {
+				// The now-superseded answer was already streamed, so close it off
+				// before the corrected one begins.
+				if strings.TrimSpace(resp.Content) != "" {
+					out <- Event{Type: "message_end", Model: profile.Name, Elapsed: time.Since(start)}
+				}
+				messages = append(messages, memory.Message{
+					Role:      "assistant",
+					Content:   resp.Content,
+					Timestamp: time.Now().UTC(),
+				})
 				messages = append(messages, memory.Message{
 					Role:      "user",
 					Content:   feedback,
@@ -282,22 +301,18 @@ func (r *Runner) Run(ctx context.Context, profile *models.Profile, task string, 
 				continue
 			}
 
-			// Final answer. Stream it for nicer UI.
-			out <- Event{Type: "step", Step: "finalizing", Model: profile.Name, Elapsed: time.Since(start)}
-			streamOut := make(chan llm.StreamEvent)
-			go client.ChatStream(ctx, messages, streamOut)
-			for ev := range streamOut {
-				if ev.Err != nil {
-					out <- Event{Type: "error", Error: ev.Err.Error(), Elapsed: time.Since(start)}
-					return
-				}
-				if ev.Done {
-					break
-				}
-				out <- Event{Type: "message", Content: ev.Content, Model: profile.Name, Elapsed: time.Since(start)}
-			}
+			// The answer has already been streamed to the user by the callback
+			// above, so there is nothing left to fetch.
 			out <- Event{Type: "done", Elapsed: time.Since(start)}
 			return
+		}
+
+		// The model may narrate before calling a tool. That text has already been
+		// streamed, so tell the UI to commit it before tool output follows,
+		// otherwise it stays in the pending buffer and is attributed to a later
+		// turn.
+		if strings.TrimSpace(resp.Content) != "" {
+			out <- Event{Type: "message_end", Model: profile.Name, Elapsed: time.Since(start)}
 		}
 
 		// Add the assistant message with tool calls to the conversation.
