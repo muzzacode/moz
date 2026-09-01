@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,12 +17,14 @@ import (
 	"github.com/muzzacode/moz/internal/adaptive"
 	"github.com/muzzacode/moz/internal/agent"
 	"github.com/muzzacode/moz/internal/approval"
+	"github.com/muzzacode/moz/internal/checkpoint"
 	"github.com/muzzacode/moz/internal/config"
 	"github.com/muzzacode/moz/internal/cost"
 	"github.com/muzzacode/moz/internal/credentials"
 	"github.com/muzzacode/moz/internal/llm"
 	"github.com/muzzacode/moz/internal/memory"
 	"github.com/muzzacode/moz/internal/models"
+	"github.com/muzzacode/moz/internal/project"
 	"github.com/muzzacode/moz/internal/safepath"
 	"github.com/muzzacode/moz/internal/todo"
 	"github.com/muzzacode/moz/internal/tools"
@@ -35,15 +38,21 @@ var (
 )
 
 type Model struct {
-	cfg       *config.Config
-	registry  *models.Registry
-	store     *memory.Store
-	session   *memory.Session
-	creds     *credentials.Manager
-	router    *adaptive.Router
-	toolkit   *tools.Toolkit
-	todos     *todo.List
-	todoStore *todo.Store
+	cfg         *config.Config
+	registry    *models.Registry
+	store       *memory.Store
+	session     *memory.Session
+	creds       *credentials.Manager
+	router      *adaptive.Router
+	toolkit     *tools.Toolkit
+	todos       *todo.List
+	todoStore   *todo.Store
+	checkpoints *checkpoint.Store
+	budget      *adaptive.Budget
+	// cwd and instructions ground the model in the current project, including
+	// in chat mode where it has no tools to discover them itself.
+	cwd          string
+	instructions *project.Instructions
 
 	profile      *models.Profile
 	mode         string
@@ -63,6 +72,14 @@ type Model struct {
 	onConfirmYes func() tea.Cmd
 	onConfirmNo  func() tea.Cmd
 
+	// modelPicker is the keyboard-driven model chooser opened by /models.
+	modelPicker picker
+	// pastes holds large pasted blocks that are collapsed in the prompt.
+	pastes pasteStore
+	// mouseEnabled captures the wheel for scrolling, at the cost of the
+	// terminal's own text selection.
+	mouseEnabled bool
+
 	// Agent loop.
 	agentEnabled  bool
 	agentOut      chan agent.Event
@@ -70,6 +87,55 @@ type Model struct {
 	currentStep   string
 	startTime     time.Time
 	elapsed       time.Duration
+
+	// cancel aborts the in-flight agent task or stream. Non-nil only while a
+	// task is running.
+	cancel context.CancelFunc
+	// lastEvent is when the running task last showed signs of life, used to
+	// detect a hung task.
+	lastEvent time.Time
+}
+
+// busy reports whether a model request or agent task is in flight.
+func (m *Model) busy() bool {
+	return m.streaming || m.cancel != nil
+}
+
+// abort cancels the in-flight task without exiting the application.
+func (m *Model) abort(reason string) {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	// Release the agent if it is blocked waiting on an approval decision.
+	if m.agentApproval != nil {
+		select {
+		case m.agentApproval <- false:
+		default:
+		}
+	}
+	// Once aborted the update loop stops calling agentWait, so nothing would
+	// consume the agent's remaining events and its goroutine would block
+	// forever on send. Drain until it closes the channel.
+	if m.agentOut != nil {
+		go drain(m.agentOut, m.agentApproval)
+		m.agentOut = nil
+		m.agentApproval = nil
+	}
+	m.streaming = false
+	m.confirming = false
+	m.currentStep = ""
+	if m.pending != "" {
+		m.session.Messages = append(m.session.Messages, memory.Message{
+			Role:      "assistant",
+			Content:   m.pending,
+			Model:     m.profile.Name,
+			Timestamp: time.Now().UTC(),
+		})
+		m.pending = ""
+	}
+	m.addSystem(reason)
+	m.updateViewport()
 }
 
 var (
@@ -84,8 +150,10 @@ var (
 
 func New(cfg *config.Config, registry *models.Registry, store *memory.Store, initial ...*memory.Session) (*Model, error) {
 	creds := credentials.New()
-	router := adaptive.New(registry, creds)
-	router.PreferLocal = cfg.Adaptive.PreferLocal
+	// One budget for the whole session, shared with every agent run so the
+	// ceiling applies across tasks rather than resetting each time.
+	budget := adaptive.NewBudget(cfg.Adaptive.MaxSessionCost)
+	router := adaptive.NewWithOptions(registry, creds, agent.RoutingOptions(cfg), budget)
 
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
@@ -101,6 +169,12 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 		todos = todo.New()
 	}
 	toolkit := tools.New(safe, todos)
+	checkpoints := checkpoint.New()
+	toolkit.Checkpoints = checkpoints
+
+	// Load the project's instruction file once at startup so both chat and agent
+	// mode are grounded in it.
+	instructions, _ := project.Load(cwd)
 
 	profile, err := registry.Find(cfg.DefaultModel)
 	if err != nil {
@@ -115,9 +189,15 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	ta := textarea.New()
 	ta.Placeholder = "Type a message, or /help for commands"
 	ta.SetWidth(80)
-	ta.SetHeight(1)
+	// Multi-line by default. A single line makes it impossible to review a long
+	// prompt before sending, and pasted text scrolls out of sight.
+	ta.SetHeight(promptHeight)
 	ta.ShowLineNumbers = false
-	ta.Prompt = ""
+	// A marker makes it obvious where input begins, and which lines are part of
+	// the same prompt once it wraps.
+	ta.Prompt = promptMarker
+	ta.CharLimit = 0
+	ta.MaxHeight = promptMaxHeight
 	ta.KeyMap.InsertNewline = shiftEnterBinding
 	ta.Focus()
 
@@ -130,28 +210,50 @@ func New(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	}
 
 	return &Model{
-		cfg:        cfg,
-		registry:   registry,
-		store:      store,
-		session:    sess,
-		creds:      creds,
-		router:     router,
-		toolkit:    toolkit,
-		todos:      todos,
-		todoStore:  todoStore,
-		profile:    profile,
-		mode:       mode,
+		cfg:          cfg,
+		registry:     registry,
+		store:        store,
+		session:      sess,
+		creds:        creds,
+		router:       router,
+		toolkit:      toolkit,
+		checkpoints:  checkpoints,
+		budget:       budget,
+		cwd:          cwd,
+		instructions: instructions,
+		todos:        todos,
+		todoStore:    todoStore,
+		profile:      profile,
+		mode:         mode,
 		agentEnabled: cfg.Agent,
-		textarea:   ta,
-		viewport:   vp,
-		streamChan: make(chan llm.StreamEvent),
+		textarea:     ta,
+		viewport:     vp,
+		streamChan:   make(chan llm.StreamEvent),
+		pastes:       newPasteStore(),
 	}, nil
 }
 
 func (m Model) Init() tea.Cmd {
+	// State the working directory, tool status, and any project file up front.
+	// Otherwise there is no way to tell whether an answer was grounded in the
+	// repository or invented.
+	var b strings.Builder
+	fmt.Fprintf(&b, "Moz %s in %s", version.Version, m.cwd)
+	if m.agentEnabled {
+		b.WriteString("\nTools: on")
+	} else {
+		b.WriteString("\nTools: off — cannot read files. Enable with /agent on")
+	}
+	if m.instructions != nil {
+		fmt.Fprintf(&b, "\nProject instructions: %s", m.instructions.Source)
+	}
+	m.addSystem(b.String())
+	m.updateViewport()
+
 	return tea.Batch(
 		textarea.Blink,
 		tea.EnterAltScreen,
+		watchdog(),
 	)
 }
 
@@ -163,11 +265,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 4
 		m.textarea.SetWidth(msg.Width)
-		m.textarea.SetHeight(3)
+		m.textarea.SetHeight(promptHeight)
 		m.ready = true
 		m.updateViewport()
 
+	case tea.MouseMsg:
+		// The conversation is the primary content, so the wheel scrolls it
+		// without needing to move focus away from the input.
+		m.viewport, _ = m.viewport.Update(msg)
+		return m, nil
+
 	case tea.KeyMsg:
+		// The picker is modal: it owns the keyboard while open, so navigation
+		// keys do not leak into the text input.
+		if m.modelPicker.active {
+			return m.handlePickerKey(msg)
+		}
+
+		// Scrolling is checked before the textarea sees the key, otherwise every
+		// keystroke is swallowed by the input and the history cannot be read.
+		if handled, cmd := m.handleScrollKey(msg); handled {
+			return m, cmd
+		}
+
+		// A large paste is collapsed to a placeholder before it reaches the
+		// input, so it cannot bury the prompt.
+		if msg.Paste {
+			if handled := m.handlePaste(string(msg.Runes)); handled {
+				m.updateViewport()
+				return m, nil
+			}
+		}
+
 		if m.confirming {
 			switch msg.Type {
 			case tea.KeyCtrlC, tea.KeyEsc:
@@ -186,7 +315,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
-		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
+		// Esc interrupts the running task rather than killing the session, so a
+		// long agent run can be abandoned without losing the conversation.
+		case msg.Type == tea.KeyEsc:
+			if m.busy() {
+				m.abort("Interrupted")
+				return m, nil
+			}
+			m.saveSession()
+			return m, tea.Quit
+		case msg.Type == tea.KeyCtrlC:
+			if m.busy() {
+				m.abort("Interrupted (press Ctrl+C again to quit)")
+				return m, nil
+			}
 			m.saveSession()
 			return m, tea.Quit
 		case key.Matches(msg, enterBinding):
@@ -196,10 +338,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
 
+	case watchdogTick:
+		return m.handleWatchdog()
+
 	case llm.StreamEvent:
+		m.noteActivity()
 		return m.handleStreamEvent(msg)
 
 	case agent.Event:
+		m.noteActivity()
 		return m.handleAgentEvent(msg)
 
 	case errMsg:
@@ -212,8 +359,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 type errMsg string
 
 func (m *Model) submitInput() (tea.Model, tea.Cmd) {
-	input := strings.TrimSpace(m.textarea.Value())
+	input := strings.TrimSpace(m.pastes.expand(m.textarea.Value()))
 	m.textarea.Reset()
+	m.pastes.reset()
 	m.textarea.Blur()
 	m.textarea.Focus()
 
@@ -221,8 +369,8 @@ func (m *Model) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.streaming {
-		m.errMsg = "wait for the current response to finish"
+	if m.busy() {
+		m.errMsg = "a task is running — press esc to interrupt it"
 		return m, nil
 	}
 
@@ -336,6 +484,27 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 
 	case "/memory":
 		m.addSystem(m.store.Summary())
+		return m, nil
+
+	case "/undo":
+		if m.busy() {
+			m.errMsg = "cannot undo while a task is running; press esc first"
+			return m, nil
+		}
+		actions, err := m.checkpoints.UndoLast()
+		if err != nil && len(actions) == 0 {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Undid %d file change(s):", len(actions))
+		for _, a := range actions {
+			b.WriteString("\n  " + a)
+		}
+		if err != nil {
+			fmt.Fprintf(&b, "\n  (partial: %v)", err)
+		}
+		m.addSystem(b.String())
 		return m, nil
 
 	case "/sessions":
@@ -458,20 +627,24 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			path = args[1]
 		}
 		return m.runWithApproval("grep", pattern, map[string]any{"pattern": pattern, "path": path}, func() tea.Cmd {
-			matches, err := m.toolkit.Grep(pattern, path)
+			res, err := m.toolkit.Grep(pattern, path)
 			if err != nil {
 				m.errMsg = err.Error()
 				m.updateViewport()
 				return nil
 			}
 			var b strings.Builder
-			b.WriteString(fmt.Sprintf("%d matches\n", len(matches)))
-			for _, match := range matches {
-				rel, _ := filepath.Rel(path, match.File)
-				if rel == "" {
+			fmt.Fprintf(&b, "%d matches in %d files", len(res.Matches), res.FilesScanned)
+			if res.Truncated {
+				b.WriteString(" (truncated)")
+			}
+			b.WriteString("\n")
+			for _, match := range res.Matches {
+				rel, relErr := filepath.Rel(path, match.File)
+				if relErr != nil || rel == "" {
 					rel = match.File
 				}
-				b.WriteString(fmt.Sprintf("%s:%d: %s\n", rel, match.Line, match.Content))
+				fmt.Fprintf(&b, "%s:%d: %s\n", rel, match.Line, match.Content)
 			}
 			m.addSystem(b.String())
 			return nil
@@ -501,6 +674,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			content = strings.Join(args[1:], " ")
 		}
 		desc := fmt.Sprintf("write %s", path)
+		m.checkpoints.Begin("/write " + path)
 		return m.runWithApproval("write_file", desc, map[string]any{"path": path}, func() tea.Cmd {
 			if err := m.toolkit.WriteFile(path, content); err != nil {
 				m.errMsg = err.Error()
@@ -526,6 +700,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		oldStr := strings.TrimSpace(split[0])
 		newStr := strings.TrimSpace(split[1])
 		desc := fmt.Sprintf("edit %s", path)
+		m.checkpoints.Begin("/edit " + path)
 		return m.runWithApproval("edit_file", desc, map[string]any{"path": path}, func() tea.Cmd {
 			if err := m.toolkit.EditFile(path, oldStr, newStr); err != nil {
 				m.errMsg = err.Error()
@@ -562,8 +737,26 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 			return nil
 		})
 
+	case "/mouse":
+		m.mouseEnabled = !m.mouseEnabled
+		if m.mouseEnabled {
+			m.addSystem("Mouse wheel scrolling on. Terminal text selection is disabled while this is active; run /mouse again to restore it.")
+			m.updateViewport()
+			return m, tea.EnableMouseCellMotion
+		}
+		m.addSystem("Mouse capture off. Text selection restored; scroll with PgUp/PgDn, Shift+arrows or Home/End.")
+		m.updateViewport()
+		return m, tea.DisableMouse
+
 	case "/models":
-		m.addSystem(m.renderModels())
+		// A plain list still has a use when piping or reading back, so keep it
+		// behind an explicit argument.
+		if len(args) > 0 && (args[0] == "list" || args[0] == "-l") {
+			m.addSystem(m.renderModels())
+			return m, nil
+		}
+		m.modelPicker = newModelPicker(m.registry, m.router, m.profile.ID)
+		m.updateViewport()
 		return m, nil
 
 	case "/set":
@@ -581,7 +774,7 @@ func (m *Model) handleSlash(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/help":
-		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /sessions, /resume, /new, /clear, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit")
+		m.addSystem("Commands: /models, /model, /mode, /agent, /memory, /sessions, /resume, /new, /clear, /undo, /read, /list, /grep, /run, /write, /edit, /git, /fetch, /todo, /set, /exit\nEsc interrupts a running task. /undo reverses the last task's file changes.")
 		return m, nil
 
 	default:
@@ -766,25 +959,41 @@ func (m *Model) startAgent(input string) tea.Cmd {
 
 	m.agentOut = make(chan agent.Event)
 	m.agentApproval = make(chan bool)
+	m.noteActivity()
 
 	cfg := m.cfg
 	reg := m.registry
-	runner := agent.New(cfg, reg, m.toolkit)
+	// Share the session's credentials and budget so spend accumulates across
+	// tasks and the ceiling is not silently reset on each message.
+	runner := agent.NewWithDeps(cfg, reg, m.toolkit, m.creds, m.budget)
 	sess := m.session
 
-	go runner.Run(context.Background(), m.profile, input, sess, m.agentOut, m.agentApproval)
+	// Group every file change made by this task so /undo reverses the task as
+	// a unit rather than one edit at a time.
+	m.checkpoints.Begin(truncate(input, 60))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	go runner.Run(ctx, m.profile, input, sess, m.agentOut, m.agentApproval)
 
 	return m.agentWait()
 }
 
+// agentWait returns a command that blocks for the next agent event.
+//
+// The channel is captured when the command is built, not read inside the
+// closure. Bubble Tea runs commands on their own goroutines, so touching
+// m.agentOut in there would race with abort clearing it. For the same reason
+// the closure never mutates model state; only Update may do that.
 func (m *Model) agentWait() tea.Cmd {
+	ch := m.agentOut
+	if ch == nil {
+		return func() tea.Msg { return agent.Event{Type: "done"} }
+	}
 	return func() tea.Msg {
-		if m.agentOut == nil {
-			return agent.Event{Type: "done"}
-		}
-		ev, ok := <-m.agentOut
+		ev, ok := <-ch
 		if !ok {
-			m.agentOut = nil
 			return agent.Event{Type: "done"}
 		}
 		return ev
@@ -808,7 +1017,7 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			return m, m.agentWait()
 		}
 		m.currentStep = fmt.Sprintf("tool: %s", ev.ToolCall.Name)
-		desc := fmt.Sprintf("%s(%s)", ev.ToolCall.Name, string(ev.ToolCall.Arguments))
+		desc := m.describeToolCall(ev.ToolCall)
 		policy := m.cfg.Approval.For(ev.ToolCall.Name)
 
 		switch policy {
@@ -832,7 +1041,7 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			return m, m.agentWait()
 		default:
 			m.confirming = true
-			m.confirmText = fmt.Sprintf("Allow %s? [y/n]", desc)
+			m.confirmText = formatConfirm(desc)
 			m.onConfirmYes = func() tea.Cmd {
 				if m.agentApproval != nil {
 					m.agentApproval <- true
@@ -865,35 +1074,98 @@ func (m Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, m.agentWait()
 
+	case "message_end":
+		// The model narrated before doing more work. Commit it now so it is not
+		// merged into whatever the next turn produces.
+		m.commitPending()
+		m.updateViewport()
+		return m, m.agentWait()
+
 	case "usage":
 		m.updateViewport()
 		return m, m.agentWait()
 
 	case "done":
-		m.streaming = false
-		m.currentStep = ""
-		if m.pending != "" {
-			m.session.Messages = append(m.session.Messages, memory.Message{
-				Role:      "assistant",
-				Content:   m.pending,
-				Model:     m.profile.Name,
-				Timestamp: time.Now().UTC(),
-			})
-			m.pending = ""
-		}
+		m.finishTask()
+		m.commitPending()
 		m.saveSession()
 		m.updateViewport()
 		return m, nil
 
+	case "warning", "compacted", "verified":
+		m.addSystem(ev.Step)
+		return m, m.agentWait()
+
+	case "cancelled":
+		m.finishTask()
+		m.addSystem("Task cancelled")
+		m.updateViewport()
+		return m, nil
+
 	case "error":
-		m.streaming = false
-		m.currentStep = ""
+		m.finishTask()
 		m.errMsg = ev.Error
 		m.updateViewport()
 		return m, nil
 	}
 
 	return m, m.agentWait()
+}
+
+// prependSystem returns msgs with a system prompt in front, replacing any
+// system message the history already starts with so prompts cannot stack up
+// across turns.
+func prependSystem(msgs []memory.Message, prompt string) []memory.Message {
+	out := make([]memory.Message, 0, len(msgs)+1)
+	out = append(out, memory.Message{Role: "system", Content: prompt, Timestamp: time.Now().UTC()})
+	for _, m := range msgs {
+		// Session history holds UI notices as system messages; those are not
+		// operating instructions and would confuse the model, so drop them.
+		if m.Role == "system" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// drain consumes a cancelled agent's remaining events so its goroutine can
+// reach its deferred close instead of blocking on an unread channel. Approvals
+// are auto-denied because no user is watching any more.
+func drain(events <-chan agent.Event, approvals chan bool) {
+	for ev := range events {
+		if ev.Type != "tool_call" || approvals == nil {
+			continue
+		}
+		select {
+		case approvals <- false:
+		default:
+		}
+	}
+}
+
+// commitPending moves streamed text into the conversation history.
+func (m *Model) commitPending() {
+	if m.pending == "" {
+		return
+	}
+	m.session.Messages = append(m.session.Messages, memory.Message{
+		Role:      "assistant",
+		Content:   m.pending,
+		Model:     m.profile.Name,
+		Timestamp: time.Now().UTC(),
+	})
+	m.pending = ""
+}
+
+// finishTask clears in-flight task state and releases the cancel function.
+func (m *Model) finishTask() {
+	m.streaming = false
+	m.currentStep = ""
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
 }
 
 func (m *Model) startStream() tea.Cmd {
@@ -907,9 +1179,19 @@ func (m *Model) startStream() tea.Cmd {
 
 	ch := make(chan llm.StreamEvent)
 	m.streamChan = ch
+	m.noteActivity()
 
-	client := llm.New(m.profile, m.creds)
-	go client.ChatStream(context.Background(), m.session.Messages, ch)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	// Chat mode has no tools, so the model must be told where it is and that it
+	// cannot read anything. Without this it answers questions about "this
+	// project" from training data and invents a plausible-sounding other project
+	// with the same name.
+	msgs := prependSystem(m.session.Messages, agent.BuildChatPrompt(m.cwd, m.instructions))
+
+	client := llm.New(m.profile, m.creds).WithTimeout(m.cfg.RequestTimeout())
+	go client.ChatStream(ctx, msgs, ch)
 
 	return waitForStream(ch)
 }
@@ -926,16 +1208,19 @@ func waitForStream(ch chan llm.StreamEvent) tea.Cmd {
 
 func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	if ev.Err != nil {
-		m.streaming = false
+		m.finishTask()
+		// A cancelled request is a user action, not an error to report.
+		if errors.Is(ev.Err, context.Canceled) {
+			m.updateViewport()
+			return m, nil
+		}
 		m.errMsg = ev.Err.Error()
-		m.currentStep = ""
 		m.updateViewport()
 		return m, nil
 	}
 
 	if ev.Done {
-		m.streaming = false
-		m.currentStep = ""
+		m.finishTask()
 		if m.pending != "" {
 			m.session.Messages = append(m.session.Messages, memory.Message{
 				Role:      "assistant",
@@ -958,12 +1243,17 @@ func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 func (m *Model) updateViewport() {
 	var b strings.Builder
 	for _, msg := range m.session.Messages {
-		b.WriteString(formatMessage(msg))
+		b.WriteString(formatMessage(msg, m.viewport.Width))
 		b.WriteString("\n\n")
 	}
 	if m.streaming && m.pending != "" {
-		b.WriteString(formatMessage(memory.Message{Role: "assistant", Content: m.pending, Model: m.profile.Name, Timestamp: time.Now().UTC()}))
+		b.WriteString(formatMessage(memory.Message{Role: "assistant", Content: m.pending, Model: m.profile.Name, Timestamp: time.Now().UTC()}, m.viewport.Width))
 		b.WriteString("▌")
+	}
+	if m.modelPicker.active {
+		b.WriteString("\n")
+		b.WriteString(m.modelPicker.View())
+		b.WriteString("\n")
 	}
 	if m.confirming {
 		b.WriteString("\n")
@@ -975,25 +1265,93 @@ func (m *Model) updateViewport() {
 		b.WriteString(errorStyle.Render(m.errMsg))
 		b.WriteString("\n")
 	}
+	// Follow new output only when already at the bottom. Otherwise scrolling back
+	// to read something would be undone by the next streamed token.
+	stick := m.viewport.AtBottom()
 	m.viewport.SetContent(b.String())
-	m.viewport.GotoBottom()
+	if stick || m.modelPicker.active || m.confirming {
+		// A prompt or picker must be visible even if the user had scrolled away.
+		m.viewport.GotoBottom()
+	}
 }
 
-func formatMessage(m memory.Message) string {
+// formatMessage renders one message, wrapped to width.
+//
+// The viewport truncates rather than wraps, so anything past the right edge is
+// lost from the display entirely. Wrapping has to happen before the content is
+// handed over.
+func formatMessage(m memory.Message, width int) string {
+	body := wrapText(m.Content, width)
 	switch m.Role {
 	case "user":
-		return userStyle.Render("You") + "\n" + m.Content
+		return userStyle.Render("You") + "\n" + body
 	case "assistant":
 		header := assistantStyle.Render("Moz")
 		if m.Model != "" {
 			header = assistantStyle.Render("Moz") + systemStyle.Render(" ("+m.Model+")")
 		}
-		return header + "\n" + m.Content
+		return header + "\n" + body
 	case "system":
-		return infoStyle.Render(m.Content)
+		return infoStyle.Render(body)
 	default:
-		return m.Content
+		return body
 	}
+}
+
+// wrapText word-wraps to width, leaving indented lines alone.
+//
+// Code and diffs rely on their leading whitespace, and reflowing them makes them
+// unreadable, so only ordinary prose paragraphs are wrapped.
+func wrapText(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	// Leave a column free: some terminals wrap early at the exact edge.
+	limit := width - 1
+	if limit < 20 {
+		limit = 20
+	}
+
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if len(line) <= limit || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, wrapLine(line, limit)...)
+	}
+	return strings.Join(out, "\n")
+}
+
+// wrapLine breaks a single long line on word boundaries.
+func wrapLine(line string, limit int) []string {
+	var out []string
+	var cur strings.Builder
+
+	for _, word := range strings.Fields(line) {
+		switch {
+		case cur.Len() == 0:
+			cur.WriteString(word)
+		case cur.Len()+1+len(word) <= limit:
+			cur.WriteByte(' ')
+			cur.WriteString(word)
+		default:
+			out = append(out, cur.String())
+			cur.Reset()
+			cur.WriteString(word)
+		}
+		// A single word longer than the limit still has to be broken somewhere.
+		for cur.Len() > limit {
+			s := cur.String()
+			out = append(out, s[:limit])
+			cur.Reset()
+			cur.WriteString(s[limit:])
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 func (m *Model) saveSession() {
@@ -1008,24 +1366,38 @@ func (m Model) View() string {
 		return "Initializing Moz..."
 	}
 
+	// Ordered by importance, because a narrow terminal truncates the tail. The
+	// interrupt hint comes first while a task is running: it is the one control
+	// the user needs at that moment, so it must never be the part cut off.
 	var status strings.Builder
-	status.WriteString(fmt.Sprintf(" moz %s | mode: %s | agent: %v | model: %s ", version.Version, m.mode, m.agentEnabled, m.profile.Name))
+	if m.busy() {
+		status.WriteString(" esc: interrupt |")
+	}
+	status.WriteString(fmt.Sprintf(" moz %s | %s ", version.Version, m.profile.Name))
 
 	if m.currentStep != "" {
-		status.WriteString(fmt.Sprintf("| step: %s ", m.currentStep))
+		status.WriteString(fmt.Sprintf("| %s ", m.currentStep))
 	}
 	if m.elapsed > 0 {
-		status.WriteString(fmt.Sprintf("| time: %s ", m.elapsed.Round(time.Millisecond)))
+		status.WriteString(fmt.Sprintf("| %s ", m.elapsed.Round(time.Millisecond)))
 	}
 	if m.totalUsage.TotalTokens > 0 {
-		status.WriteString(fmt.Sprintf("| tokens: %d ", m.totalUsage.TotalTokens))
+		status.WriteString(fmt.Sprintf("| %d tok ", m.totalUsage.TotalTokens))
 	}
 	if costStr := cost.Format(m.profile.ID, m.totalUsage); costStr != "" {
-		status.WriteString(fmt.Sprintf("| cost: %s ", costStr))
+		status.WriteString(fmt.Sprintf("| %s ", costStr))
+	}
+	// Spend against a configured ceiling, so an approaching limit is visible
+	// before it silently changes routing.
+	if m.budget != nil {
+		if limit := m.budget.Limit(); limit > 0 {
+			status.WriteString(fmt.Sprintf("| $%.2f/$%.2f ", m.budget.Spent(), limit))
+		}
 	}
 	if m.todos.PendingCount() > 0 {
 		status.WriteString(fmt.Sprintf("| todos: %d ", m.todos.PendingCount()))
 	}
+	status.WriteString(fmt.Sprintf("| mode: %s | agent: %v ", m.mode, m.agentEnabled))
 
 	bar := statusStyle.Width(m.viewport.Width).Render(status.String())
 
@@ -1042,6 +1414,10 @@ func Run(cfg *config.Config, registry *models.Registry, store *memory.Store, ini
 	if err != nil {
 		return err
 	}
+	// Mouse capture is deliberately off: enabling it takes over the terminal's
+	// own click-and-drag selection, which breaks copying text out of the
+	// conversation. Keyboard scrolling covers the same need, and /mouse turns
+	// wheel scrolling on for anyone who prefers it.
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }

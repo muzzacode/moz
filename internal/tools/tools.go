@@ -1,15 +1,14 @@
 package tools
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/muzzacode/moz/internal/index"
 	"github.com/muzzacode/moz/internal/safepath"
 	"github.com/muzzacode/moz/internal/todo"
 )
@@ -34,9 +33,31 @@ type Match struct {
 	Content string `json:"content"`
 }
 
+// Recorder snapshots a file's state before it is modified, so changes can be
+// rolled back. It is an interface to keep tools decoupled from the checkpoint
+// implementation.
+type Recorder interface {
+	Record(path string) error
+}
+
 type Toolkit struct {
 	Safe  *safepath.Policy
 	Todos *todo.List
+	// Checkpoints, when set, receives a snapshot request before every write.
+	Checkpoints Recorder
+	// ReadOnly denies every mutating tool. Sub-agents run this way so parallel
+	// investigation can never corrupt the workspace.
+	ReadOnly bool
+}
+
+// ReadOnlyCopy returns a toolkit that shares path policy but refuses mutations.
+func (tk *Toolkit) ReadOnlyCopy() *Toolkit {
+	clone := *tk
+	clone.ReadOnly = true
+	// Snapshots are pointless when nothing can be written, and the checkpoint
+	// store is not safe for concurrent use by parallel sub-agents.
+	clone.Checkpoints = nil
+	return &clone
 }
 
 func New(safe *safepath.Policy, todos *todo.List) *Toolkit {
@@ -44,6 +65,15 @@ func New(safe *safepath.Policy, todos *todo.List) *Toolkit {
 		todos = todo.New()
 	}
 	return &Toolkit{Safe: safe, Todos: todos}
+}
+
+// snapshot records the pre-change state of path. A snapshot failure must not
+// block the edit, but it does mean that edit cannot be undone.
+func (tk *Toolkit) snapshot(resolved string) {
+	if tk.Checkpoints == nil {
+		return
+	}
+	_ = tk.Checkpoints.Record(resolved)
 }
 
 func (tk *Toolkit) ReadFile(path string) (string, error) {
@@ -71,6 +101,7 @@ func (tk *Toolkit) WriteFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 		return err
 	}
+	tk.snapshot(p)
 	return writeAtomic(p, []byte(content), 0644)
 }
 
@@ -113,6 +144,7 @@ func (tk *Toolkit) editFile(path, oldStr, newStr string, replaceAll bool) error 
 	if err != nil {
 		return err
 	}
+	tk.snapshot(p)
 	return writeAtomic(p, []byte(updated), info.Mode().Perm())
 }
 
@@ -163,72 +195,41 @@ func (tk *Toolkit) ListDir(path string) ([]FileInfo, error) {
 	return out, nil
 }
 
-func (tk *Toolkit) Grep(pattern, path string) ([]Match, error) {
+// Grep searches for pattern under path.
+//
+// Discovery is repository-aware: ignored directories, binary files, and
+// oversized files are skipped, and results are capped. A naive walk spends most
+// of its time in .git and node_modules and can return enough output to destroy
+// the model's context window.
+func (tk *Toolkit) Grep(pattern, path string) (*index.SearchResult, error) {
+	return tk.GrepWithOptions(pattern, path, index.SearchOptions{})
+}
+
+func (tk *Toolkit) GrepWithOptions(pattern, path string, opts index.SearchOptions) (*index.SearchResult, error) {
 	p, err := tk.Safe.Resolve(path)
 	if err != nil {
 		return nil, err
 	}
-
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("invalid pattern: %w", err)
-	}
-
-	var matches []Match
-
-	info, err := os.Stat(p)
-	if err != nil {
-		return nil, err
-	}
-
-	if info.IsDir() {
-		err = filepath.WalkDir(p, func(walkPath string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			fileMatches, err := grepFile(re, walkPath)
-			if err != nil {
-				return nil // skip unreadable files
-			}
-			matches = append(matches, fileMatches...)
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		fileMatches, err := grepFile(re, p)
-		if err != nil {
-			return nil, err
-		}
-		matches = append(matches, fileMatches...)
-	}
-
-	return matches, nil
+	return index.Search(p, pattern, opts)
 }
 
-func grepFile(re *regexp.Regexp, path string) ([]Match, error) {
-	f, err := os.Open(path)
+// FindFiles locates files by name or glob, ranked by how well they match.
+func (tk *Toolkit) FindFiles(query, path string, limit int) ([]string, error) {
+	p, err := tk.Safe.Resolve(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	return index.FindFiles(p, query, limit)
+}
 
-	var matches []Match
-	scanner := bufio.NewScanner(f)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := scanner.Text()
-		if re.MatchString(line) {
-			matches = append(matches, Match{
-				File:    path,
-				Line:    lineNo,
-				Content: strings.TrimSpace(line),
-			})
-		}
+// Outline lists a file's top-level declarations, letting the agent orient in a
+// large file without reading all of it.
+func (tk *Toolkit) Outline(path string) (*index.Outline, error) {
+	p, err := tk.Safe.Resolve(path)
+	if err != nil {
+		return nil, err
 	}
-	return matches, scanner.Err()
+	return index.GetOutline(p)
 }
 
 func (tk *Toolkit) Exec(command, cwd string) Result {

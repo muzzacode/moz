@@ -34,9 +34,39 @@ type ToolCall struct {
 	Arguments json.RawMessage
 }
 
+// DefaultRequestTimeout bounds a single model request. Streaming replies reset
+// no timer, so this is a hard ceiling on one request/response cycle.
+const DefaultRequestTimeout = 5 * time.Minute
+
 type Client struct {
 	Profile     *models.Profile
 	Credentials *credentials.Manager
+	// Timeout bounds each request. Zero uses DefaultRequestTimeout.
+	Timeout time.Duration
+	// MaxRetries bounds transient-failure retries. Negative disables retrying;
+	// zero uses DefaultMaxRetries.
+	MaxRetries int
+	// Notify reports retry attempts so the UI can show progress.
+	Notify OnRetry
+}
+
+// WithRetry returns a copy of the client using the supplied retry budget and
+// notification callback.
+func (c *Client) WithRetry(maxRetries int, notify OnRetry) *Client {
+	clone := *c
+	clone.MaxRetries = maxRetries
+	clone.Notify = notify
+	return &clone
+}
+
+func (c *Client) retries() int {
+	if c.MaxRetries < 0 {
+		return 0
+	}
+	if c.MaxRetries == 0 {
+		return DefaultMaxRetries
+	}
+	return c.MaxRetries
 }
 
 func New(p *models.Profile, cm *credentials.Manager) *Client {
@@ -44,6 +74,25 @@ func New(p *models.Profile, cm *credentials.Manager) *Client {
 		cm = credentials.New()
 	}
 	return &Client{Profile: p, Credentials: cm}
+}
+
+// WithTimeout returns a copy of the client using the supplied request timeout.
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	clone := *c
+	clone.Timeout = d
+	return &clone
+}
+
+func (c *Client) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return DefaultRequestTimeout
+}
+
+// withDeadline derives a bounded context. The caller must always call cancel.
+func (c *Client) withDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, c.timeout())
 }
 
 func (c *Client) isAnthropic() bool {
@@ -216,7 +265,15 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 		if err != nil {
 			return nil, err
 		}
-		return client.Chat(ctx, messages, toolDefs)
+		return withRetry(ctx, c.retries(), c.Notify, func() (*ChatResponse, error) {
+			reqCtx, cancel := c.withDeadline(ctx)
+			defer cancel()
+			resp, err := client.Chat(reqCtx, messages, toolDefs)
+			if err != nil {
+				return nil, annotateTimeout(ctx, reqCtx, c.timeout(), err)
+			}
+			return resp, nil
+		})
 	}
 
 	client, err := c.apiClient()
@@ -225,9 +282,17 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 	}
 
 	req := c.buildRequest(messages, toolDefs)
-	resp, err := client.CreateChatCompletion(ctx, req)
+	resp, err := withRetry(ctx, c.retries(), c.Notify, func() (openai.ChatCompletionResponse, error) {
+		reqCtx, cancel := c.withDeadline(ctx)
+		defer cancel()
+		r, err := client.CreateChatCompletion(reqCtx, req)
+		if err != nil {
+			return r, annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("chat request failed: %w", err))
+		}
+		return r, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("chat request failed: %w", err)
+		return nil, err
 	}
 
 	if len(resp.Choices) == 0 {
@@ -251,8 +316,12 @@ func (c *Client) Chat(ctx context.Context, messages []memory.Message, toolDefs [
 		})
 	}
 
-	// Fallback for local models that emit tool calls as plain JSON in content.
-	if len(cr.ToolCalls) == 0 && cr.Content != "" {
+	// Fallback for models that emit tool calls as JSON in the message body.
+	//
+	// This is deliberately skipped for providers with native tool calling: a
+	// legitimate answer that merely contains JSON, such as explaining a config
+	// file, would otherwise be misread as a tool call.
+	if len(cr.ToolCalls) == 0 && cr.Content != "" && !c.Profile.SupportsNativeTools() {
 		if calls := parseContentToolCalls(cr.Content); len(calls) > 0 {
 			cr.ToolCalls = calls
 			cr.Content = ""
@@ -281,12 +350,23 @@ func (c *Client) ChatStream(ctx context.Context, messages []memory.Message, out 
 		return
 	}
 
+	reqCtx, cancel := c.withDeadline(ctx)
+	defer cancel()
+
 	req := c.buildRequest(messages, nil)
 	req.Stream = true
 
-	stream, err := client.CreateChatCompletionStream(ctx, req)
+	// Only stream creation is retried. Once tokens have been emitted a retry
+	// would duplicate output, so mid-stream failures are surfaced as-is.
+	stream, err := withRetry(ctx, c.retries(), c.Notify, func() (*openai.ChatCompletionStream, error) {
+		s, err := client.CreateChatCompletionStream(reqCtx, req)
+		if err != nil {
+			return nil, annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("failed to start stream: %w", err))
+		}
+		return s, nil
+	})
 	if err != nil {
-		out <- StreamEvent{Err: fmt.Errorf("failed to start stream: %w", err)}
+		out <- StreamEvent{Err: err}
 		return
 	}
 	defer stream.Close()
@@ -298,11 +378,24 @@ func (c *Client) ChatStream(ctx context.Context, messages []memory.Message, out 
 			return
 		}
 		if err != nil {
-			out <- StreamEvent{Err: fmt.Errorf("stream error: %w", err)}
+			out <- StreamEvent{Err: annotateTimeout(ctx, reqCtx, c.timeout(), fmt.Errorf("stream error: %w", err))}
 			return
 		}
 		if len(resp.Choices) > 0 {
 			out <- StreamEvent{Content: resp.Choices[0].Delta.Content}
 		}
 	}
+}
+
+// annotateTimeout distinguishes a user-initiated cancellation from a provider
+// that simply stopped responding. Without this the user sees an opaque
+// "context canceled" and cannot tell which happened.
+func annotateTimeout(parent, req context.Context, limit time.Duration, err error) error {
+	if parent.Err() != nil {
+		return context.Canceled
+	}
+	if req.Err() != nil {
+		return fmt.Errorf("model did not respond within %s: %w", limit, err)
+	}
+	return err
 }

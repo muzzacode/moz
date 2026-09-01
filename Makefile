@@ -2,7 +2,7 @@ SHELL := /bin/bash
 BINARY := moz
 INSTALL_DIR := $(HOME)/.local/bin
 
-.PHONY: build install uninstall run test clean clean-bin bootstrap vet help ci
+.PHONY: build install uninstall run test race clean clean-bin bootstrap vet help ci
 
 build:
 	go build -o bin/$(BINARY) ./cmd/moz
@@ -20,6 +20,11 @@ run: build
 test:
 	go test ./...
 
+# The TUI runs Bubble Tea commands on their own goroutines, so races here are
+# real bugs rather than test artifacts. Keep this in CI.
+race:
+	go test -race ./...
+
 vet:
 	go vet ./...
 
@@ -33,7 +38,7 @@ clean-bin:
 bootstrap:
 	./bootstrap.sh
 
-ci: vet test
+ci: vet race
 
 help:
 	@echo "Available targets:"
@@ -42,6 +47,8 @@ help:
 	@echo "  uninstall"
 	@echo "  run"
 	@echo "  test"
+	@echo "  race"
+	@echo "  ci"
 	@echo "  vet"
 	@echo "  clean"
 	@echo "  clean-bin"
