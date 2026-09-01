@@ -1,17 +1,21 @@
 <!--
-Moz is a personal, model-agnostic, agentic terminal.
-It runs locally-first with Ollama and can promote any task to frontier cloud models.
+Moz is an agentic terminal built for running local and open-weight LLMs.
+It keeps inference on your own hardware by default and only promotes work to the
+cloud when the task genuinely needs a larger model.
 -->
 
 # Moz
 
-Moz is a personal, model-agnostic, agentic terminal. It runs on top of the [PAIEP](https://github.com/muzzacode/paiep) local-AI engineering platform and can promote any task to frontier open-weight models or Claude.
+Moz is an agentic terminal built for **running local and open-weight LLMs**. It starts with models you can run on your own machine and only promotes a task to a cheap cloud or frontier model when the local model is not enough. The goal is to make local, open-weight inference the default—not a fallback.
 
-- Local-first: routes to local Ollama models by default and only pays for inference when the task warrants it.
-- Model-agnostic: local, cheap cloud, and frontier models behind one interface, switchable at runtime.
-- Cost-aware: tiered routing, escalation on failure, live spend display, and an optional session budget ceiling.
-- Session memory: conversations are saved locally and can be listed and resumed.
-- Not yet built: cross-machine memory sync, web dashboard, voice input.
+It runs on top of the [PAIEP](https://github.com/muzzacode/paiep) local-AI engineering platform, but also works with a standalone Ollama install. You can lock to any local, open-weight, or proprietary model at runtime, and adaptive routing will pick the cheapest option that fits the task.
+
+- **Local and open-weight first**: routes to your own Ollama models by default; cloud inference is a fallback, not the default.
+- **Model-agnostic**: one interface for local models, open-weight models via OpenRouter, and proprietary APIs (Anthropic, OpenAI), switchable at runtime.
+- **Cost-aware**: difficulty-based tiered routing, escalation on failure, live spend display, and an optional session budget ceiling.
+- **Agentic**: autonomous tool loop with planning, diff previews, self-verification, `/undo`, and project-instruction aware tools.
+- **Session memory**: conversations are saved locally and can be listed and resumed.
+- **Not yet built**: cross-machine memory sync, web dashboard, voice input.
 
 ## Requirements
 
@@ -28,7 +32,7 @@ git clone https://github.com/muzzacode/moz.git
 cd moz
 ./install.sh
 
-# 2. Make sure Ollama is running and qwen2.5-coder:14b is installed
+# 2. Make sure Ollama is running and an open-weight model like qwen2.5-coder:14b is installed
 #    If you use PAIEP: cd /path/to/paiep && make start
 
 # 3. Run Moz
@@ -192,7 +196,7 @@ Or inside Moz:
 
 ## Project status
 
-Working: adaptive routing, agent loop with planning and todos, context compaction, interruptible tasks, self-verification, diff previews, session persistence, headless `--task` mode, shell completion, and live cost estimates.
+Working: local and open-weight first adaptive routing, agent loop with planning and todos, context compaction, interruptible tasks, self-verification, diff previews, session persistence, headless `--task` mode, shell completion, and live cost estimates.
 
 See the architecture and roadmap in Notion:
 https://app.notion.com/p/3cbd7006d32681478748e7f162968d5e
