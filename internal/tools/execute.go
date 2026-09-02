@@ -80,6 +80,25 @@ func renderSearch(res *index.SearchResult) string {
 	return b.String()
 }
 
+// renderWebSearch formats search results as a compact, human-readable list.
+// Plain text is cheaper in tokens than JSON and prevents the model from
+// echoing raw structured output back to the user.
+func renderWebSearch(results []SearchResult) string {
+	if len(results) == 0 {
+		return "no results"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d result(s)\n\n", len(results))
+	for i, r := range results {
+		title := r.Title
+		if title == "" {
+			title = r.URL
+		}
+		fmt.Fprintf(&b, "%d. %s\n   %s\n   %s\n", i+1, title, r.Snip, r.URL)
+	}
+	return b.String()
+}
+
 // ResolveName maps an alias to its canonical tool name.
 func ResolveName(name string) string { return resolveToolName(name) }
 
@@ -273,8 +292,7 @@ func (tk *Toolkit) Execute(call ToolCall) ToolResult {
 			tr.Error = err.Error()
 			return tr
 		}
-		data, _ := json.MarshalIndent(results, "", "  ")
-		tr.Content = string(data)
+		tr.Content = renderWebSearch(results)
 
 	case "web_fetch":
 		var args struct {

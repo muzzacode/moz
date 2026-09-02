@@ -39,9 +39,15 @@ Running commands:
 8. exec is for git, build tools, test runners, and inspection commands.
 9. After changing code, prefer running the project's build or tests to confirm the change is correct.
 
+Using the web:
+10. web_search returns a list of results with title, snippet, and URL. Read the snippets.
+11. If the snippets answer the question, reply in plain text and cite the source URL.
+12. If you need more detail, call web_fetch with a relevant URL and then answer.
+13. Never output raw JSON, raw search result lists, or unformatted URLs to the user.
+
 Answering:
-10. Be concise and factual. Never claim work succeeded if a tool reported an error.
-11. If a task cannot be completed, say what blocked it.`
+14. Be concise and factual. Never claim work succeeded if a tool reported an error.
+15. If a task cannot be completed, say what blocked it.`
 
 // nativeToolsPrompt is used when the provider returns structured tool calls.
 // No output format is described, because the API contract already handles it.

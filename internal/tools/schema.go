@@ -199,7 +199,7 @@ func Definitions() []Definition {
 		},
 		{
 			Name:        "web_fetch",
-			Description: "Fetch the content of a URL and return it as readable text. Use this when you need to read a specific web page.",
+			Description: "Fetch the content of a URL and return it as readable text. Use this after web_search when the snippet is not enough to answer.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -270,7 +270,7 @@ func Definitions() []Definition {
 		},
 		{
 			Name:        "web_search",
-			Description: "Search the web for a query. Use this to look up documentation, recent facts, or external resources.",
+			Description: "Search the web for a query. Returns a list of results with title, snippet, and URL. Read the snippets. If they answer the question, reply in plain text and cite the source URL. If you need more detail, call web_fetch with a relevant URL. Never output raw JSON or unformatted result lists to the user.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
